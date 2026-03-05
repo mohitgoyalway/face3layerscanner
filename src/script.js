@@ -69,10 +69,12 @@ faceMesh.onResults(onResults);
 function onResults(results) {
     if (isAnalyzing) return;
     
+    // Dynamically match canvas to video display size
     if (video.videoWidth > 0) {
-        if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
-            canvas.width = video.clientWidth;
-            canvas.height = video.clientHeight;
+        const rect = video.getBoundingClientRect();
+        if (canvas.width !== rect.width || canvas.height !== rect.height) {
+            canvas.width = rect.width;
+            canvas.height = rect.height;
         }
     }
 

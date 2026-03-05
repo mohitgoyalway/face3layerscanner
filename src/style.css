@@ -351,6 +351,46 @@ header {
     text-transform: uppercase;
 }
 
+/* Responsive Layout Overrides */
+@media (max-width: 768px) {
+    .container { padding: 1rem 0.5rem; }
+    .brand-title { font-size: 1.5rem; }
+    .tagline { font-size: 0.55rem; letter-spacing: 2px; }
+    
+    .view-panel { padding: 2rem 1rem; border-radius: 16px; }
+    
+    .video-frame { 
+        aspect-ratio: 4/5; /* Taller for mobile portrait */
+        max-height: 60vh;
+    }
+
+    .live-region-row {
+        justify-content: flex-start;
+        padding: 10px 15px;
+        gap: 12px;
+    }
+
+    .live-region-item {
+        flex: 0 0 140px;
+        padding: 8px;
+        border-radius: 14px;
+    }
+
+    .refining-indicator { font-size: 0.45rem; padding: 4px 8px; }
+    .live-biometric-badge { bottom: 25px; right: 8px; font-size: 0.5rem; }
+
+    .vitals-snapshot { flex-direction: column; gap: 10px; }
+    .v-snap-card { padding: 1rem; }
+    .v-val { font-size: 1.4rem; }
+
+    .results-grid { grid-template-columns: 1fr; }
+    .wellness-hero h1 { font-size: 3.5rem !important; }
+}
+
+@media (max-width: 480px) {
+    .live-region-item { flex: 0 0 120px; }
+}
+
 .hidden { display: none !important; }
 .status-indicator { width: 8px; height: 8px; border-radius: 50%; background: #ff5555; display: inline-block; margin-right: 10px; }
 .status-indicator.active { background: #55ff55; box-shadow: 0 0 10px #55ff55; }
