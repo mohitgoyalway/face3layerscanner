@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Face Wellness AI Scan</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- MediaPipe Face Mesh -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+</head>
+<body class="premium-dark">
+    <div class="background-overlay"></div>
+    <div class="container">
+        <header>
+            <h1 class="brand-title">Daily Face Wellness <span class="accent">AI Scan</span></h1>
+            <p class="tagline">Authentic biometric analysis for your skin health.</p>
+        </header>
+        
+        <main>
+            <!-- INITIALIZATION / START VIEW -->
+            <div id="setupView" class="view-panel">
+                <div class="hero-circle">
+                    <div class="inner-pulse"></div>
+                    <div class="icon-camera">👤</div>
+                </div>
+                <p class="instruction">Position yourself in good lighting for a 15-second deep biometric scan.</p>
+                <button id="startScanner" class="premium-btn">BEGIN SCAN</button>
+            </div>
+
+            <!-- SCANNER VIEW -->
+            <div id="scannerView" class="view-panel hidden">
+                <div class="video-container">
+                    <div class="video-frame">
+                        <video id="video" autoplay muted playsinline></video>
+                        <canvas id="overlay"></canvas>
+                        
+                        <div id="scanStatus" class="scan-status-overlay">
+                            <div class="status-chip">
+                                <span class="status-indicator"></span>
+                                <span id="statusText">INITIALIZING...</span>
+                            </div>
+                        </div>
+
+                        <!-- Linear Progress Overlay -->
+                        <div id="analysisOverlay" class="analysis-layer hidden">
+                            <div class="linear-timer-container">
+                                <div class="timer-meta">
+                                    <span class="label">ANALYZING FACIAL MARKERS</span>
+                                    <span id="timerText" class="time-val">15.0s</span>
+                                </div>
+                                <div class="progress-bar-bg">
+                                    <div id="progressBarFill" class="progress-bar-fill"></div>
+                                </div>
+                                <div class="shimmer-text">Deeply analyzing your facial markers...</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- NEW: LIVE REGION PREVIEW ROW -->
+                    <div id="liveRegionRow" class="live-region-row hidden">
+                        <div class="live-region-item">
+                            <canvas id="live-Forehead"></canvas>
+                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <span>FOREHEAD</span>
+                        </div>
+                        <div class="live-region-item">
+                            <canvas id="live-Nose"></canvas>
+                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <span>NOSE</span>
+                        </div>
+                        <div class="live-region-item">
+                            <canvas id="live-Left-Cheek"></canvas>
+                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <span>L. CHEEK</span>
+                        </div>
+                        <div class="live-region-item">
+                            <canvas id="live-Right-Cheek"></canvas>
+                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <span>R. CHEEK</span>
+                        </div>
+                        <div class="live-region-item">
+                            <canvas id="live-Chin"></canvas>
+                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <span>CHIN</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NEW: REGION CONFIRMATION VIEW -->
+            <div id="regionConfirmationView" class="view-panel hidden">
+                <div class="processing-header">
+                    <h2 class="accent">VERIFY REGIONS</h2>
+                    <p class="tagline">Confirm the AI identified your facial landmarks correctly.</p>
+                </div>
+                
+                <div id="regionImagesGrid" class="region-images-grid">
+                    <!-- Crops will be injected here -->
+                </div>
+
+                <div class="confirmation-actions" style="margin-top: 2rem; display: flex; flex-direction: column; align-items: center; gap: 1rem;">
+                    <button id="confirmRegionsBtn" class="premium-btn">CONFIRM & PROCEED</button>
+                    <button id="retryScanBtn" class="text-btn">BACK TO SCAN</button>
+                </div>
+            </div>
+
+            <!-- NEW ANALYSIS/LOADING VIEW -->
+            <div id="analysisView" class="view-panel hidden">
+                <div class="processing-header">
+                    <div class="circular-loader"></div>
+                    <h2 class="accent">BIOMETRICS CAPTURED</h2>
+                    <p class="tagline">Initial vital signs extracted successfully.</p>
+                </div>
+                
+                <div class="vitals-snapshot">
+                    <div class="v-snap-card">
+                        <span class="v-label">HEART RATE</span>
+                        <span id="previewBPM" class="v-val">--</span>
+                        <span class="v-unit">BPM</span>
+                    </div>
+                    <div class="v-snap-card">
+                        <span class="v-label">RESPIRATION</span>
+                        <span id="previewResp" class="v-val">--</span>
+                        <span class="v-unit">BR/M</span>
+                    </div>
+                    <div class="v-snap-card">
+                        <span class="v-label">BLINK RATE</span>
+                        <span id="previewBlink" class="v-val">--</span>
+                        <span class="v-unit">BLINKS/M</span>
+                    </div>
+                </div>
+
+                <div class="deep-scan-notice">
+                    <div class="dna-spinner"></div>
+                    <p>Performing deep analysis of 24 dermatological markers...</p>
+                    <div class="mini-progress-bg"><div id="deepProgressFill" class="mini-progress-fill"></div></div>
+                </div>
+            </div>
+
+            <!-- RESULTS VIEW -->
+            <section id="resultsSection" class="view-panel hidden">
+                <div class="results-header">
+                    <h2>Your Wellness Report</h2>
+                    <button id="resetBtn" class="text-btn">RESCAN</button>
+                </div>
+                
+                <div class="results-container">
+                    <div id="resultsGrid" class="results-grid">
+                        <!-- Score cards will be injected here -->
+                    </div>
+                </div>
+            </section>
+        </main>
+        
+        <footer>
+            <p>&copy; 2026 Daily Face Wellness AI. Private & Secure.</p>
+        </footer>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
