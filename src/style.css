@@ -320,6 +320,29 @@ header {
     50% { opacity: 0.8; } 
 }
 
+.live-biometric-badge {
+    position: absolute;
+    bottom: 30px;
+    right: 12px;
+    background: rgba(0, 210, 255, 0.2);
+    border: 1px solid rgba(0, 210, 255, 0.4);
+    color: var(--neon-blue);
+    font-size: 0.6rem;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 1px;
+    backdrop-filter: blur(4px);
+    z-index: 10;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    animation: pulseBorder 2s infinite;
+}
+
+@keyframes pulseBorder {
+    0%, 100% { border-color: rgba(0, 210, 255, 0.4); }
+    50% { border-color: rgba(85, 255, 85, 0.8); }
+}
+
 .live-region-item span {
     font-size: 0.5rem;
     font-weight: 600;

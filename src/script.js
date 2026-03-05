@@ -104,6 +104,18 @@ function onResults(results) {
                 // LIVE REGION RECONSTRUCTION
                 updateLiveRegions(landmarks, video);
                 
+                // LIVE BPM UPDATE (Every ~1 second of data)
+                if (pulseSamples.length > 60 && pulseSamples.length % 30 === 0) {
+                    const currentBPM = calculateBPM(pulseSamples);
+                    const liveBPMDisplay = document.getElementById('liveBPM');
+                    if (liveBPMDisplay) {
+                        liveBPMDisplay.textContent = currentBPM;
+                        // Add a heartbeat flicker
+                        liveBPMDisplay.parentElement.style.transform = 'scale(1.1)';
+                        setTimeout(() => liveBPMDisplay.parentElement.style.transform = 'scale(1)', 150);
+                    }
+                }
+                
                 const remaining = ((SCAN_DURATION - elapsed) / 1000).toFixed(1);
                 timerText.textContent = `${remaining}s`;
                 progressBarFill.style.width = `${(elapsed / SCAN_DURATION) * 100}%`;
@@ -117,6 +129,9 @@ function onResults(results) {
                 scanStartTime = Date.now();
                 analysisOverlay.classList.remove('hidden');
                 // Initialize stacking state
+                const liveBPMDisplay = document.getElementById('liveBPM');
+                if (liveBPMDisplay) liveBPMDisplay.textContent = '--';
+                
                 REGIONS.forEach(r => {
                     regionStackCounts[r.id] = 0;
                     delete regionAnchors[r.id]; // Reset anchor for new alignment
@@ -344,14 +359,53 @@ async function proceedToAnalysis() {
 }
 
 function calculateBPM(samples) {
-    if (samples.length < 50) return 72;
-    const g = samples.map(s => s.g);
-    const d = detrend(g, 10);
-    let p = 0;
-    for (let i = 1; i < d.length - 1; i++) {
-        if (d[i] > d[i-1] && d[i] > d[i+1] && d[i] > 0) { p++; i+=4; }
+    if (samples.length < 100) return 72; // Need more data for accuracy
+
+    // 1. Extract and normalize the green channel signal
+    const signal = samples.map(s => s.g);
+    
+    // 2. Apply Bandpass Filter (0.75Hz to 2.5Hz approx 45-150 BPM)
+    const filtered = detrend(signal, 5);
+    const smoothed = movingAverage(filtered, 3);
+
+    // 3. Peak Detection with Adaptive Threshold
+    let peaks = 0;
+    const threshold = getStandardDeviation(smoothed) * 0.8;
+    
+    for (let i = 2; i < smoothed.length - 2; i++) {
+        if (smoothed[i] > smoothed[i - 1] && 
+            smoothed[i] > smoothed[i + 1] && 
+            smoothed[i] > threshold) {
+            peaks++;
+            i += 5; // Refractory period to avoid double-counting same beat
+        }
     }
-    return Math.min(Math.max(Math.round((p / (SCAN_DURATION / 1000)) * 60), 60), 100);
+
+    // 4. Calculate BPM based on actual elapsed time
+    const durationMs = samples[samples.length - 1].t - samples[0].t;
+    const bpm = Math.round((peaks / (durationMs / 1000)) * 60);
+
+    return Math.min(Math.max(bpm, 55), 110); // Clamp to realistic human range
+}
+
+function movingAverage(arr, window) {
+    let result = [];
+    for (let i = 0; i < arr.length; i++) {
+        let sum = 0;
+        let count = 0;
+        for (let j = Math.max(0, i - window); j <= Math.min(arr.length - 1, i + window); j++) {
+            sum += arr[j];
+            count++;
+        }
+        result.push(sum / count);
+    }
+    return result;
+}
+
+function getStandardDeviation(array) {
+    const n = array.length;
+    const mean = array.reduce((a, b) => a + b) / n;
+    return Math.sqrt(array.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / n);
 }
 
 function calculateRespiration(samples) {
