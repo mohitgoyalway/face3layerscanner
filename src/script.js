@@ -69,11 +69,28 @@ faceMesh.onResults(onResults);
 function onResults(results) {
     if (isAnalyzing) return;
     
-    // PRECISION SYNC: Match canvas internal buffer to displayed pixels
+    // HARDWARE SYNC: Calculate actual video content dimensions (ignoring letterboxing)
     if (video.videoWidth > 0) {
-        if (canvas.width !== video.offsetWidth || canvas.height !== video.offsetHeight) {
-            canvas.width = video.offsetWidth;
-            canvas.height = video.offsetHeight;
+        const containerWidth = video.offsetWidth;
+        const containerHeight = video.offsetHeight;
+        const videoRatio = video.videoWidth / video.videoHeight;
+        const containerRatio = containerWidth / containerHeight;
+
+        let actualWidth, actualHeight;
+        if (containerRatio > videoRatio) {
+            actualHeight = containerHeight;
+            actualWidth = actualHeight * videoRatio;
+        } else {
+            actualWidth = containerWidth;
+            actualHeight = actualWidth / videoRatio;
+        }
+
+        if (canvas.width !== actualWidth || canvas.height !== actualHeight) {
+            canvas.width = actualWidth;
+            canvas.height = actualHeight;
+            // Center the canvas over the centered 'contain' video
+            canvas.style.width = `${actualWidth}px`;
+            canvas.style.height = `${actualHeight}px`;
         }
     }
 

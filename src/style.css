@@ -377,36 +377,61 @@ header {
 /* Responsive Layout Overrides */
 @media (max-width: 768px) {
     .container { padding: 0.5rem; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-    header { margin-bottom: 1rem; flex-shrink: 0; }
-    .brand-title { font-size: 1.3rem; }
+    header { margin-bottom: 0.5rem; flex-shrink: 0; }
+    .brand-title { font-size: 1.2rem; }
     
     .view-panel { 
-        padding: 1rem; 
+        padding: 0.8rem; 
         border-radius: 16px; 
         flex-grow: 1; 
         display: flex; 
         flex-direction: column; 
-        overflow-y: auto;
+        overflow: hidden; /* Prevent panel itself from scrolling */
         justify-content: flex-start;
     }
     
+    .video-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+
     .video-frame { 
         flex-shrink: 0;
         width: 100%;
-        max-height: 45vh; /* Force smaller height on mobile to leave room for regions */
-        aspect-ratio: auto;
+        height: auto;
+        min-height: 250px;
+        max-height: 50vh;
+        border-radius: 16px;
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain; /* Ensure full sensor visibility */
     }
 
     .live-region-row {
-        flex-shrink: 0;
+        flex-grow: 1;
+        flex-shrink: 1;
+        display: flex;
         justify-content: flex-start;
         padding: 10px 5px;
         gap: 10px;
-        margin-top: 1rem;
+        margin-top: 0.5rem;
+        overflow-x: auto;
+        overflow-y: hidden;
+        min-height: 160px; /* Ensure space is reserved even if empty */
     }
 
     .live-region-item {
-        flex: 0 0 110px; /* Smaller tiles for mobile */
+        flex: 0 0 110px;
+        height: 140px;
         padding: 6px;
         border-radius: 12px;
     }
@@ -414,9 +439,14 @@ header {
     .refining-indicator { font-size: 0.35rem; padding: 2px 6px; }
     .live-biometric-badge { bottom: 20px; right: 5px; font-size: 0.45rem; padding: 1px 4px; }
 
-    .vitals-snapshot { flex-direction: row; flex-wrap: wrap; gap: 8px; }
-    .v-snap-card { flex: 1 1 30%; padding: 0.8rem 0.4rem; }
-    .v-val { font-size: 1.1rem; }
+    .vitals-snapshot { 
+        display: grid; 
+        grid-template-columns: 1fr 1fr 1fr; 
+        gap: 5px; 
+        margin-bottom: 1rem;
+    }
+    .v-snap-card { padding: 0.5rem; }
+    .v-val { font-size: 1rem; }
 }
 
 @media (max-width: 480px) {
