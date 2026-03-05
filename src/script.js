@@ -69,12 +69,11 @@ faceMesh.onResults(onResults);
 function onResults(results) {
     if (isAnalyzing) return;
     
-    // Dynamically match canvas to video display size
+    // PRECISION SYNC: Match canvas internal buffer to displayed pixels
     if (video.videoWidth > 0) {
-        const rect = video.getBoundingClientRect();
-        if (canvas.width !== rect.width || canvas.height !== rect.height) {
-            canvas.width = rect.width;
-            canvas.height = rect.height;
+        if (canvas.width !== video.offsetWidth || canvas.height !== video.offsetHeight) {
+            canvas.width = video.offsetWidth;
+            canvas.height = video.offsetHeight;
         }
     }
 
@@ -88,8 +87,12 @@ function onResults(results) {
         const landmarks = results.multiFaceLandmarks[0];
         lastLandmarks = landmarks;
         
-        drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: 'rgba(255,255,255,0.3)', lineWidth: 0.5});
-        drawConnectors(ctx, landmarks, FACEMESH_CONTOURS, {color: '#00d2ff', lineWidth: 1});
+        // Use precision drawing
+        ctx.save();
+        // MediaPipe landmarks are 0-1, so they automatically scale to canvas.width/height
+        drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: 'rgba(255,255,255,0.25)', lineWidth: 0.5});
+        drawConnectors(ctx, landmarks, FACEMESH_CONTOURS, {color: '#00d2ff', lineWidth: 1.2});
+        ctx.restore();
 
         if (scanStartTime > 0) {
             statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";

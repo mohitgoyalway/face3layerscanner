@@ -126,23 +126,46 @@ header {
     box-shadow: 0 10px 20px rgba(255, 255, 255, 0.1);
 }
 
-/* Scanner View */
+/* Scanner View - Fluid & Precise */
 .video-frame {
     position: relative;
-    width: 100%; max-width: 800px; /* Increased for better desktop view */
-    aspect-ratio: 16/9; margin: 0 auto;
-    border-radius: 20px; overflow: hidden;
-    background: #000; border: 1px solid rgba(255,255,255,0.1);
-    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    border-radius: 24px;
+    overflow: hidden;
+    background: #000;
+    border: 1px solid rgba(255,255,255,0.1);
+    box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+    /* Remove fixed aspect-ratio to let video drive the height */
 }
 
 #video { 
-    width: 100%; height: 100%; object-fit: cover; 
+    width: 100%;
+    height: auto;
+    display: block; /* Removes bottom whitespace */
     image-rendering: -webkit-optimize-contrast;
-    image-rendering: crisp-edges;
     filter: contrast(1.05) saturate(1.05);
 }
-#overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+#overlay { 
+    position: absolute; 
+    top: 0; 
+    left: 0; 
+    width: 100%; 
+    height: 100%;
+    pointer-events: none;
+}
+
+@media (max-width: 768px) {
+    .video-frame { 
+        border-radius: 16px;
+        max-height: 70vh; /* Prevent it from being too tall on mobile */
+    }
+    
+    .brand-title { font-size: 1.4rem; }
+    .tagline { font-size: 0.5rem; }
+}
 
 /* Linear Timer Overlay - NEW */
 .analysis-layer {
@@ -353,38 +376,47 @@ header {
 
 /* Responsive Layout Overrides */
 @media (max-width: 768px) {
-    .container { padding: 1rem 0.5rem; }
-    .brand-title { font-size: 1.5rem; }
-    .tagline { font-size: 0.55rem; letter-spacing: 2px; }
+    .container { padding: 0.5rem; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    header { margin-bottom: 1rem; flex-shrink: 0; }
+    .brand-title { font-size: 1.3rem; }
     
-    .view-panel { padding: 2rem 1rem; border-radius: 16px; }
+    .view-panel { 
+        padding: 1rem; 
+        border-radius: 16px; 
+        flex-grow: 1; 
+        display: flex; 
+        flex-direction: column; 
+        overflow-y: auto;
+        justify-content: flex-start;
+    }
     
     .video-frame { 
-        aspect-ratio: 4/5; /* Taller for mobile portrait */
-        max-height: 60vh;
+        flex-shrink: 0;
+        width: 100%;
+        max-height: 45vh; /* Force smaller height on mobile to leave room for regions */
+        aspect-ratio: auto;
     }
 
     .live-region-row {
+        flex-shrink: 0;
         justify-content: flex-start;
-        padding: 10px 15px;
-        gap: 12px;
+        padding: 10px 5px;
+        gap: 10px;
+        margin-top: 1rem;
     }
 
     .live-region-item {
-        flex: 0 0 140px;
-        padding: 8px;
-        border-radius: 14px;
+        flex: 0 0 110px; /* Smaller tiles for mobile */
+        padding: 6px;
+        border-radius: 12px;
     }
 
-    .refining-indicator { font-size: 0.45rem; padding: 4px 8px; }
-    .live-biometric-badge { bottom: 25px; right: 8px; font-size: 0.5rem; }
+    .refining-indicator { font-size: 0.35rem; padding: 2px 6px; }
+    .live-biometric-badge { bottom: 20px; right: 5px; font-size: 0.45rem; padding: 1px 4px; }
 
-    .vitals-snapshot { flex-direction: column; gap: 10px; }
-    .v-snap-card { padding: 1rem; }
-    .v-val { font-size: 1.4rem; }
-
-    .results-grid { grid-template-columns: 1fr; }
-    .wellness-hero h1 { font-size: 3.5rem !important; }
+    .vitals-snapshot { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+    .v-snap-card { flex: 1 1 30%; padding: 0.8rem 0.4rem; }
+    .v-val { font-size: 1.1rem; }
 }
 
 @media (max-width: 480px) {
