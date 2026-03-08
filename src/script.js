@@ -28,13 +28,43 @@ const deepProgressFill = document.getElementById('deepProgressFill');
 const offscreenCanvas = document.createElement('canvas');
 const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
 
-// CLINICAL REGION DEFINITIONS
+// CLINICAL REGION DEFINITIONS with Affine Anchors (3 points for mapping)
 const REGIONS = [
-    { id: 'live-Forehead', name: 'Forehead', indices: [10, 109, 338, 67], pad: 0.15 },
-    { id: 'live-Nose', name: 'Nose', indices: [168, 6, 197, 2, 102, 331], pad: 0.2 },
-    { id: 'live-Left-Cheek', name: 'Left Cheek', indices: [116, 117, 118, 101, 123], pad: 0.25 },
-    { id: 'live-Right-Cheek', name: 'Right Cheek', indices: [345, 346, 347, 330, 352], pad: 0.25 },
-    { id: 'live-Chin', name: 'Chin', indices: [164, 18, 200, 152], pad: 0.2 }
+    { 
+        id: 'live-Forehead', name: 'Forehead', 
+        indices: [10, 109, 338, 67], 
+        pad: 0.15,
+        anchors: [10, 109, 338], // Center-Top, Left-Top, Right-Top
+        target: [[400, 200], [200, 450], [600, 450]] 
+    },
+    { 
+        id: 'live-Nose', name: 'Nose', 
+        indices: [168, 6, 197, 2, 102, 331], 
+        pad: 0.2,
+        anchors: [168, 102, 331], // Bridge, Left Nostril, Right Nostril
+        target: [[400, 250], [300, 600], [500, 600]]
+    },
+    { 
+        id: 'live-Left-Cheek', name: 'Left Cheek', 
+        indices: [116, 117, 118, 101, 123], 
+        pad: 0.25,
+        anchors: [116, 123, 117], 
+        target: [[300, 300], [500, 500], [200, 500]]
+    },
+    { 
+        id: 'live-Right-Cheek', name: 'Right Cheek', 
+        indices: [345, 346, 347, 330, 352], 
+        pad: 0.25,
+        anchors: [345, 352, 346],
+        target: [[500, 300], [300, 500], [600, 500]]
+    },
+    { 
+        id: 'live-Chin', name: 'Chin', 
+        indices: [164, 18, 200, 152], 
+        pad: 0.2,
+        anchors: [164, 57, 287], // Philtrum-base, Left-mouth, Right-mouth
+        target: [[400, 250], [250, 400], [550, 400]]
+    }
 ];
 
 let isAnalyzing = false;
@@ -49,243 +79,127 @@ let stabilizationFrames = 0;
 let lostFrames = 0;
 let lastLandmarks = null;
 
-// Progressive Stacking State
-const regionStackCounts = {};
-const regionAnchors = {}; // Stores the 'Golden Frame' for alignment
+// Progressive Stacking & HD Buffering
+const regionBuffers = {}; // Stores top 10 sharpest ImageData objects per region
+const MAX_BUFFER_SIZE = 10;
 
-const faceMesh = new FaceMesh({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-});
-
-faceMesh.setOptions({
-    maxNumFaces: 1,
-    refineLandmarks: true,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-});
-
-faceMesh.onResults(onResults);
-
-function onResults(results) {
-    if (isAnalyzing) return;
+/**
+ * Solves for the 2D Affine Transform Matrix [a, c, e, b, d, f]
+ * that maps source points (p1, p2, p3) to destination points (q1, q2, q3)
+ */
+function solveAffine(p, q) {
+    const matrix = [
+        [p[0].x, p[0].y, 1, 0, 0, 0],
+        [0, 0, 0, p[0].x, p[0].y, 1],
+        [p[1].x, p[1].y, 1, 0, 0, 0],
+        [0, 0, 0, p[1].x, p[1].y, 1],
+        [p[2].x, p[2].y, 1, 0, 0, 0],
+        [0, 0, 0, p[2].x, p[2].y, 1]
+    ];
     
-    // HARDWARE SYNC: Calculate actual video content dimensions (ignoring letterboxing)
-    if (video.videoWidth > 0) {
-        const containerWidth = video.offsetWidth;
-        const containerHeight = video.offsetHeight;
-        const videoRatio = video.videoWidth / video.videoHeight;
-        const containerRatio = containerWidth / containerHeight;
-
-        let actualWidth, actualHeight;
-        if (containerRatio > videoRatio) {
-            actualHeight = containerHeight;
-            actualWidth = actualHeight * videoRatio;
-        } else {
-            actualWidth = containerWidth;
-            actualHeight = actualWidth / videoRatio;
+    const rhs = [q[0][0], q[0][1], q[1][0], q[1][1], q[2][0], q[2][1]];
+    
+    // Simple Gaussian Elimination for 6x6
+    const n = 6;
+    for (let i = 0; i < n; i++) {
+        let maxRow = i;
+        for (let k = i + 1; k < n; k++) {
+            if (Math.abs(matrix[k][i]) > Math.abs(matrix[maxRow][i])) maxRow = k;
         }
+        [matrix[i], matrix[maxRow]] = [matrix[maxRow], matrix[i]];
+        [rhs[i], rhs[maxRow]] = [rhs[maxRow], rhs[i]];
 
-        if (canvas.width !== actualWidth || canvas.height !== actualHeight) {
-            canvas.width = actualWidth;
-            canvas.height = actualHeight;
-            // Center the canvas over the centered 'contain' video
-            canvas.style.width = `${actualWidth}px`;
-            canvas.style.height = `${actualHeight}px`;
+        for (let k = i + 1; k < n; k++) {
+            const c = -matrix[k][i] / matrix[i][i];
+            for (let j = i; j < n; j++) matrix[k][j] += c * matrix[i][j];
+            rhs[k] += c * rhs[i];
         }
     }
 
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
-
-    if (hasFace) {
-        lostFrames = 0;
-        const landmarks = results.multiFaceLandmarks[0];
-        lastLandmarks = landmarks;
-        
-        // Use precision drawing
-        ctx.save();
-        // MediaPipe landmarks are 0-1, so they automatically scale to canvas.width/height
-        drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: 'rgba(255,255,255,0.25)', lineWidth: 0.5});
-        drawConnectors(ctx, landmarks, FACEMESH_CONTOURS, {color: '#00d2ff', lineWidth: 1.2});
-        ctx.restore();
-
-        if (scanStartTime > 0) {
-            statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";
-            statusIndicator.classList.add('active');
-            liveRegionRow.classList.remove('hidden');
-
-            const elapsed = Date.now() - scanStartTime;
-            
-            if (elapsed < SCAN_DURATION) {
-                pulseSamples.push({ t: elapsed, g: getForeheadGreen(landmarks, video) });
-                respirationSamples.push({ t: elapsed, y: landmarks[1].y });
-                detectBlink(landmarks);
-                
-                // LIVE REGION RECONSTRUCTION
-                updateLiveRegions(landmarks, video);
-                
-                // LIVE BPM UPDATE (Every ~1 second of data)
-                if (pulseSamples.length > 60 && pulseSamples.length % 30 === 0) {
-                    const currentBPM = calculateBPM(pulseSamples);
-                    const liveBPMDisplay = document.getElementById('liveBPM');
-                    if (liveBPMDisplay) {
-                        liveBPMDisplay.textContent = currentBPM;
-                        // Add a heartbeat flicker
-                        liveBPMDisplay.parentElement.style.transform = 'scale(1.1)';
-                        setTimeout(() => liveBPMDisplay.parentElement.style.transform = 'scale(1)', 150);
-                    }
-                }
-                
-                const remaining = ((SCAN_DURATION - elapsed) / 1000).toFixed(1);
-                timerText.textContent = `${remaining}s`;
-                progressBarFill.style.width = `${(elapsed / SCAN_DURATION) * 100}%`;
-            } else {
-                completeScan();
-            }
-        } else {
-            stabilizationFrames++;
-            statusText.textContent = `STABILIZING... ${Math.round((stabilizationFrames/15)*100)}%`;
-            if (stabilizationFrames >= 15) {
-                scanStartTime = Date.now();
-                analysisOverlay.classList.remove('hidden');
-                // Initialize stacking state
-                const liveBPMDisplay = document.getElementById('liveBPM');
-                if (liveBPMDisplay) liveBPMDisplay.textContent = '--';
-                
-                REGIONS.forEach(r => {
-                    regionStackCounts[r.id] = 0;
-                    delete regionAnchors[r.id]; // Reset anchor for new alignment
-                    const indicator = document.getElementById(r.id).parentElement.querySelector('.refining-indicator');
-                    if (indicator) {
-                        indicator.textContent = 'RECONSTRUCTING...';
-                        indicator.style.color = '#00d2ff';
-                    }
-                });
-            }
-        }
-    } else {
-        lostFrames++;
-        if (lostFrames > 10) {
-            statusText.textContent = "SEARCHING FOR SUBJECT...";
-            statusIndicator.classList.remove('active');
-            if (scanStartTime === 0) stabilizationFrames = 0; 
-        }
+    const x = new Array(n);
+    for (let i = n - 1; i >= 0; i--) {
+        let sum = 0;
+        for (let j = i + 1; j < n; j++) sum += matrix[i][j] * x[j];
+        x[i] = (rhs[i] - sum) / matrix[i][i];
     }
+    return x; // [a, c, e, b, d, f]
 }
 
 /**
- * Performs Elite Clinical Reconstruction via Sharpness Gating & Texture Alignment
+ * Performs Geometric Normalization and Sharpness Gating
  */
 function updateLiveRegions(landmarks, video) {
     REGIONS.forEach(r => {
         const liveCanvas = document.getElementById(r.id);
         if (!liveCanvas) return;
-        const liveCtx = liveCanvas.getContext('2d');
+        const liveCtx = liveCanvas.getContext('2d', { willReadFrequently: true });
         
         if (liveCanvas.width !== 800) {
             liveCanvas.width = 800;
             liveCanvas.height = 800;
+            regionBuffers[r.id] = [];
         }
 
-        const points = r.indices.map(i => landmarks[i]);
-        const xs = points.map(p => p.x * video.videoWidth);
-        const ys = points.map(p => p.y * video.videoHeight);
+        // 1. AFFINE WARPING: Map 3 source landmarks to 3 target points
+        const srcPoints = r.anchors.map(idx => ({
+            x: landmarks[idx].x * video.videoWidth,
+            y: landmarks[idx].y * video.videoHeight
+        }));
         
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-        const minY = Math.min(...ys);
-        const maxY = Math.max(...ys);
+        const m = solveAffine(srcPoints, r.target);
         
-        const w = maxX - minX;
-        const h = maxY - minY;
-        const pad = Math.max(w, h) * r.pad;
-        
-        const centerX = (minX + maxX) / 2;
-        const centerY = (minY + maxY) / 2;
-        const side = Math.max(w, h) + (pad * 2);
+        // Draw to offscreen buffer first for analysis
+        offscreenCanvas.width = 800; offscreenCanvas.height = 800;
+        offscreenCtx.save();
+        // ctx.setTransform(a, b, c, d, e, f) -> canvas uses m11, m12, m21, m22, dx, dy
+        // Our solver returns [a, c, e, b, d, f] where:
+        // u = a*x + c*y + e
+        // v = b*x + d*y + f
+        // Canvas transform order is m11=a, m12=b, m21=c, m22=d, dx=e, dy=f
+        offscreenCtx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
+        offscreenCtx.drawImage(video, 0, 0);
+        offscreenCtx.restore();
 
-        // CLERICAL BOUNDARY CHECK: Ensure the region is FULLY within the video frame
-        const rawSx = centerX - side/2;
-        const rawSy = centerY - side/2;
-        
-        const isOffScreen = rawSx < 0 || rawSy < 0 || (rawSx + side) > video.videoWidth || (rawSy + side) > video.videoHeight;
+        // 2. SHARPNESS EVALUATION (Laplacian proxy)
+        const sampleSize = 200;
+        const imgData = offscreenCtx.getImageData(300, 300, sampleSize, sampleSize).data;
+        let sharpness = 0;
+        for (let i = 0; i < imgData.length - 4; i += 4) {
+            sharpness += Math.abs(imgData[i] - imgData[i+4]); // Horizontal gradient
+        }
 
-        if (!isOffScreen) {
-            const sx = rawSx;
-            const sy = rawSy;
-            const sw = side;
-            const sh = side;
+        // 3. BUFFER MANAGEMENT (Keep Top 10)
+        const currentFrame = {
+            score: sharpness,
+            data: offscreenCtx.getImageData(0, 0, 800, 800)
+        };
 
-            // 1. SHARPNESS EVALUATION
-            offscreenCanvas.width = 100; offscreenCanvas.height = 100;
-            offscreenCtx.drawImage(video, sx + sw/4, sy + sh/4, sw/2, sh/2, 0, 0, 100, 100);
-            const imgData = offscreenCtx.getImageData(0, 0, 100, 100).data;
-            let contrast = 0;
-            for (let i = 0; i < imgData.length; i += 8) {
-                contrast += Math.abs(imgData[i] - imgData[i+4]); 
-            }
-
-            const isFirstFrame = regionStackCounts[r.id] === 0;
-            const sharpnessThreshold = 1500; 
+        const buffer = regionBuffers[r.id];
+        if (buffer.length < MAX_BUFFER_SIZE || sharpness > buffer[buffer.length - 1].score) {
+            buffer.push(currentFrame);
+            buffer.sort((a, b) => b.score - a.score); // Highest first
+            if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
             
-            // 2. DRIFT PROTECTION: Check distance from Golden Anchor
-            let drift = 0;
-            if (!isFirstFrame) {
-                const anchor = regionAnchors[r.id];
-                drift = Math.sqrt(Math.pow(sx - anchor.sx, 2) + Math.pow(sy - anchor.sy, 2));
-            }
+            // Visual Update: Show the latest sharpest frame with low opacity for "weaving" look
+            liveCtx.globalAlpha = 0.15;
+            liveCtx.drawImage(offscreenCanvas, 0, 0);
+            liveCtx.globalAlpha = 1.0;
+        }
 
-            const maxAllowedDrift = video.videoWidth * 0.15; // 15% of screen width
-
-            // 3. GATING: Only accept if Sharp, Within Drift Limits, and High Quality
-            if ((contrast > sharpnessThreshold && drift < maxAllowedDrift) || isFirstFrame) {
-                if (isFirstFrame) {
-                    regionAnchors[r.id] = { sx, sy, sw, sh };
-                }
-
-                const alpha = isFirstFrame ? 1 : 0.10; // Slightly slower blend for more stability
-                liveCtx.globalAlpha = alpha;
-                liveCtx.filter = `contrast(1.15) brightness(1.02) saturate(1.05)`;
-                
-                // Texture-locked drawing
-                const dx = isFirstFrame ? 0 : (regionAnchors[r.id].sx - sx) * 0.05;
-                const dy = isFirstFrame ? 0 : (regionAnchors[r.id].sy - sy) * 0.05;
-
-                liveCtx.drawImage(video, sx, sy, sw, sh, dx, dy, 800, 800);
-                liveCtx.globalAlpha = 1.0;
-                
-                regionStackCounts[r.id]++;
-
-                const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
-                if (indicator) {
-                    const quality = Math.min(100, Math.round((regionStackCounts[r.id] / 120) * 100));
-                    if (regionStackCounts[r.id] > 100) {
-                        indicator.textContent = 'ULTRA-HD LOCKED';
-                        indicator.style.color = '#55ff55';
-                    } else {
-                        indicator.textContent = `WEAVING TEXTURE: ${quality}%`;
-                        indicator.style.color = '#00d2ff';
-                    }
-                }
+        const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
+        if (indicator) {
+            const count = buffer.length;
+            if (count >= MAX_BUFFER_SIZE) {
+                indicator.textContent = 'ULTRA-HD LOCKED';
+                indicator.style.color = '#55ff55';
             } else {
-                const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
-                if (indicator && regionStackCounts[r.id] < 100) {
-                    indicator.textContent = drift >= maxAllowedDrift ? 'RETURN TO POSITION' : 'STABILIZING...';
-                    indicator.style.color = '#ffaa00';
-                }
-            }
-        } else {
-            // REGION IS OFF-SCREEN: Freeze and show warning
-            const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
-            if (indicator) {
-                indicator.textContent = 'OUT OF BOUNDS';
-                indicator.style.color = '#ff5555';
+                indicator.textContent = `WEAVING TEXTURE: ${count * 10}%`;
+                indicator.style.color = '#00d2ff';
             }
         }
     });
 }
+
 
 function detectBlink(landmarks) {
     const verticalDist = Math.abs(landmarks[159].y - landmarks[145].y);
@@ -307,27 +221,72 @@ function getForeheadGreen(landmarks, video) {
     return g / (d.length / 4);
 }
 
+/**
+ * Computes a pixel-wise median across multiple ImageDatas to remove sensor noise
+ */
+function calculateMedianImageData(buffer) {
+    if (buffer.length === 0) return null;
+    if (buffer.length === 1) return buffer[0].data;
+
+    const width = buffer[0].data.width;
+    const height = buffer[0].data.height;
+    const size = width * height * 4;
+    const result = new Uint8ClampedArray(size);
+    const numFrames = buffer.length;
+
+    // Process in chunks to keep UI responsive
+    for (let i = 0; i < size; i += 4) {
+        // We only need to compute median for R, G, B. A is always 255.
+        for (let channel = 0; channel < 3; channel++) {
+            const values = [];
+            for (let f = 0; f < numFrames; f++) {
+                values.push(buffer[f].data.data[i + channel]);
+            }
+            // Simple sort for small array (10 elements)
+            values.sort((a, b) => a - b);
+            result[i + channel] = values[Math.floor(numFrames / 2)];
+        }
+        result[i + 3] = 255; // Alpha
+    }
+
+    return new ImageData(result, width, height);
+}
+
 async function completeScan() {
     isAnalyzing = true;
     scannerView.classList.add('hidden');
     liveRegionRow.classList.add('hidden');
     
-    regionImagesGrid.innerHTML = '';
+    regionImagesGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 2rem;"><h3>GENERATING ULTRA-HD RECONSTRUCTIONS...</h3><div class="circular-loader" style="margin: 1rem auto;"></div></div>';
 
-    REGIONS.forEach(r => {
-        const liveCanvas = document.getElementById(r.id);
-        const container = document.createElement('div');
-        container.className = 'region-item';
-        const img = document.createElement('img');
-        img.src = liveCanvas.toDataURL('image/png'); 
-        const label = document.createElement('span');
-        label.textContent = r.name;
-        container.appendChild(img);
-        container.appendChild(label);
-        regionImagesGrid.appendChild(container);
-    });
+    // Small delay to allow loader to show
+    setTimeout(() => {
+        regionImagesGrid.innerHTML = '';
 
-    regionConfirmationView.classList.remove('hidden');
+        REGIONS.forEach(r => {
+            const liveCanvas = document.getElementById(r.id);
+            const buffer = regionBuffers[r.id];
+            
+            // Perform Median Stacking
+            const medianData = calculateMedianImageData(buffer);
+            if (medianData) {
+                const ctx = liveCanvas.getContext('2d');
+                ctx.putImageData(medianData, 0, 0);
+            }
+
+            const container = document.createElement('div');
+            container.className = 'region-item';
+            const img = document.createElement('img');
+            img.src = liveCanvas.toDataURL('image/png'); 
+            const label = document.createElement('span');
+            label.textContent = r.name;
+            container.appendChild(img);
+            container.appendChild(label);
+            regionImagesGrid.appendChild(container);
+        });
+
+        regionConfirmationView.classList.remove('hidden');
+    }, 100);
 }
 
 async function proceedToAnalysis() {
