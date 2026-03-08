@@ -263,6 +263,44 @@ function solveAffine(p, q) {
     return x;
 }
 
+function triangleArea(a, b, c) {
+    return Math.abs((a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2);
+}
+
+function isValidTransform(m) {
+    if (!Array.isArray(m) || m.length !== 6 || m.some(v => !Number.isFinite(v))) return false;
+    const det = (m[0] * m[4]) - (m[1] * m[3]);
+    return Number.isFinite(det) && Math.abs(det) > 1e-4 && Math.abs(det) < 500;
+}
+
+function drawRegionFallback(region, landmarks, video) {
+    const points = region.indices
+        .map(idx => landmarks[idx])
+        .filter(Boolean)
+        .map(p => ({ x: p.x * video.videoWidth, y: p.y * video.videoHeight }));
+
+    if (!points.length) return;
+
+    const xs = points.map(p => p.x);
+    const ys = points.map(p => p.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    const width = Math.max(2, maxX - minX);
+    const height = Math.max(2, maxY - minY);
+    const padX = width * (region.pad || 0.2);
+    const padY = height * (region.pad || 0.2);
+
+    const sx = Math.max(0, minX - padX);
+    const sy = Math.max(0, minY - padY);
+    const sw = Math.max(2, Math.min(video.videoWidth - sx, width + (padX * 2)));
+    const sh = Math.max(2, Math.min(video.videoHeight - sy, height + (padY * 2)));
+
+    offscreenCtx.drawImage(video, sx, sy, sw, sh, 0, 0, 800, 800);
+}
+
 function updateLiveRegions(landmarks, video) {
     if (offscreenCanvas.width !== 800) { offscreenCanvas.width = 800; offscreenCanvas.height = 800; }
     REGIONS.forEach(r => {
@@ -273,11 +311,20 @@ function updateLiveRegions(landmarks, video) {
 
         const srcPoints = r.anchors.map(idx => ({ x: landmarks[idx].x * video.videoWidth, y: landmarks[idx].y * video.videoHeight }));
         const m = solveAffine(srcPoints, r.target);
-        
-        offscreenCtx.save();
-        offscreenCtx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
-        offscreenCtx.drawImage(video, 0, 0);
-        offscreenCtx.restore();
+
+        // Prevent stale pixels bleeding between regions/frames.
+        offscreenCtx.setTransform(1, 0, 0, 1, 0, 0);
+        offscreenCtx.clearRect(0, 0, 800, 800);
+
+        const srcArea = triangleArea(srcPoints[0], srcPoints[1], srcPoints[2]);
+        if (srcArea > 10 && isValidTransform(m)) {
+            offscreenCtx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
+            offscreenCtx.drawImage(video, 0, 0);
+            offscreenCtx.setTransform(1, 0, 0, 1, 0, 0);
+        } else {
+            // Fallback avoids catastrophic shearing/flipping when anchors are unstable.
+            drawRegionFallback(r, landmarks, video);
+        }
 
         const sampleSize = 200;
         const imgData = offscreenCtx.getImageData(300, 300, sampleSize, sampleSize).data;
@@ -381,6 +428,16 @@ async function proceedToAnalysis() {
             })
         });
         clearInterval(deepTimer);
+        if (!response.ok) {
+            let errorMessage = `Request failed (${response.status})`;
+            try {
+                const errorPayload = await response.json();
+                errorMessage = errorPayload.message || errorMessage;
+            } catch (_) {
+                // Keep fallback message when error response is not JSON.
+            }
+            throw new Error(errorMessage);
+        }
         const result = await response.json();
         setTimeout(() => { analysisView.classList.add('hidden'); showResults(result, { bpm, resp, blinks }); }, 1000);
     } catch (err) {
