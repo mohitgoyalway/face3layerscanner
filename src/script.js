@@ -48,14 +48,14 @@ let lastLandmarks = null;
 const regionBuffers = {}; 
 const MAX_BUFFER_SIZE = 10;
 
-// CLINICAL REGION DEFINITIONS (Viewport Fix: Mapping to Edges for Macro Zoom)
+// CLINICAL REGION DEFINITIONS (Rigid Similarity & Consistent Zoom)
 const REGIONS = [
     { 
         id: 'live-Forehead', name: 'Forehead', 
         indices: [10, 109, 338, 67], 
         pad: 0.15,
         anchors: [10, 127, 356], 
-        target: [[400, 50], [50, 600], [750, 600]], // Macro Zoom: Forehead fills the box
+        target: [[400, 200], [50, 600], [750, 600]], // Macro Zoom
         quality: 1.0
     },
     { 
@@ -63,23 +63,23 @@ const REGIONS = [
         indices: [168, 6, 197, 2, 102, 331], 
         pad: 0.2,
         anchors: [168, 102, 331], 
-        target: [[400, 50], [100, 750], [700, 750]], // Macro Zoom: Nose fills the box
+        target: [[400, 200], [200, 650], [600, 650]], // Macro Zoom
         quality: 1.0
     },
     { 
         id: 'live-Left-Cheek', name: 'Left Cheek', 
         indices: [116, 117, 118, 101, 123], 
         pad: 0.25,
-        anchors: [123, 117, 6], 
-        target: [[100, 100], [700, 200], [400, 800]], // Macro Zoom: Cheek fills the box
+        anchors: [123, 117, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
+        target: [[100, 300], [500, 350], [400, 650]], // Proportional Zoom
         quality: 1.5
     },
     { 
         id: 'live-Right-Cheek', name: 'Right Cheek', 
         indices: [345, 346, 347, 330, 352], 
         pad: 0.25,
-        anchors: [352, 346, 6], 
-        target: [[700, 100], [100, 200], [400, 800]], // Macro Zoom: Cheek fills the box
+        anchors: [352, 346, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
+        target: [[700, 300], [300, 350], [400, 650]], // Proportional Zoom
         quality: 1.5
     },
     { 
@@ -87,7 +87,7 @@ const REGIONS = [
         indices: [164, 18, 200, 152], 
         pad: 0.2,
         anchors: [164, 57, 287], 
-        target: [[400, 50], [50, 650], [750, 650]], // Macro Zoom: Chin fills the box
+        target: [[400, 200], [100, 600], [700, 600]], // Macro Zoom
         quality: 1.0
     }
 ];
@@ -284,7 +284,6 @@ function updateLiveRegions(landmarks, video) {
         let sharpness = 0;
         for (let i = 0; i < imgData.length - 4; i += 4) sharpness += Math.abs(imgData[i] - imgData[i+4]);
 
-        // UNIVERSAL GATING: Each region now has its own quality bar
         const qualityMultiplier = r.quality || 1.0; 
 
         const buffer = regionBuffers[r.id];
@@ -292,9 +291,10 @@ function updateLiveRegions(landmarks, video) {
             buffer.push({ score: sharpness / qualityMultiplier, data: offscreenCtx.getImageData(0, 0, 800, 800) });
             buffer.sort((a, b) => b.score - a.score);
             if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
-            liveCtx.globalAlpha = 0.15;
-            liveCtx.drawImage(offscreenCanvas, 0, 0);
+            
+            // ZERO GHOSTING: Always show the single sharpest frame at 100% opacity
             liveCtx.globalAlpha = 1.0;
+            liveCtx.drawImage(offscreenCanvas, 0, 0);
         }
 
         const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
