@@ -48,42 +48,42 @@ let lastLandmarks = null;
 const regionBuffers = {}; 
 const MAX_BUFFER_SIZE = 10;
 
-// CLINICAL REGION DEFINITIONS
+// CLINICAL REGION DEFINITIONS (Canonical Mapping for Stability)
 const REGIONS = [
     { 
         id: 'live-Forehead', name: 'Forehead', 
         indices: [10, 109, 338, 67], 
         pad: 0.15,
-        anchors: [10, 109, 338],
-        target: [[400, 200], [200, 450], [600, 450]] 
+        anchors: [10, 109, 338], // Center, Left-side, Right-side
+        target: [[400, 400], [250, 450], [550, 450]] // Centered lower to avoid hair
     },
     { 
         id: 'live-Nose', name: 'Nose', 
         indices: [168, 6, 197, 2, 102, 331], 
         pad: 0.2,
-        anchors: [168, 102, 331],
-        target: [[400, 250], [300, 600], [500, 600]]
+        anchors: [168, 102, 331], // Bridge, Left Nostril, Right Nostril
+        target: [[400, 350], [330, 550], [470, 550]] // Realistic nose proportions
     },
     { 
         id: 'live-Left-Cheek', name: 'Left Cheek', 
         indices: [116, 117, 118, 101, 123], 
         pad: 0.25,
-        anchors: [123, 117, 234], // Outer-Eye, Inner-Eye-Nose, Jawline (Wide Triangle)
-        target: [[200, 200], [450, 400], [350, 600]]
+        anchors: [123, 117, 234], // Outer-Eye, Inner-Eye, Jawline
+        target: [[200, 350], [450, 350], [350, 600]] // LEVEL eye-line to remove tilt
     },
     { 
         id: 'live-Right-Cheek', name: 'Right Cheek', 
         indices: [345, 346, 347, 330, 352], 
         pad: 0.25,
-        anchors: [352, 346, 454], // Outer-Eye, Inner-Eye-Nose, Jawline (Wide Triangle)
-        target: [[600, 200], [350, 400], [450, 600]]
+        anchors: [352, 346, 454], // Outer-Eye, Inner-Eye, Jawline
+        target: [[600, 350], [350, 350], [450, 600]] // LEVEL eye-line to remove tilt
     },
     { 
         id: 'live-Chin', name: 'Chin', 
         indices: [164, 18, 200, 152], 
         pad: 0.2,
-        anchors: [164, 57, 287],
-        target: [[400, 250], [250, 400], [550, 400]]
+        anchors: [164, 57, 287], // Philtrum, Left-mouth, Right-mouth
+        target: [[400, 300], [300, 450], [500, 450]]
     }
 ];
 
