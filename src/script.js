@@ -54,6 +54,13 @@ const REGIONS = [
         id: 'live-Forehead', name: 'Forehead', 
         indices: [10, 109, 338, 67], 
         pad: 0.15,
+        useBboxCrop: true,
+        crop: {
+            // Forehead ROI should sit above brows; shift crop upward.
+            padX: 0.35,
+            padY: 0.45,
+            offsetY: -0.35
+        },
         anchors: [10, 127, 356], 
         target: [[400, 200], [50, 600], [750, 600]], // Macro Zoom
         quality: 1.0
@@ -292,13 +299,21 @@ function drawRegionFallback(region, landmarks, video) {
 
     const width = Math.max(2, maxX - minX);
     const height = Math.max(2, maxY - minY);
-    const padX = width * (region.pad || 0.2);
-    const padY = height * (region.pad || 0.2);
+    const crop = region.crop || {};
+    const padX = width * (crop.padX ?? region.pad ?? 0.2);
+    const padY = height * (crop.padY ?? region.pad ?? 0.2);
+    const offsetX = width * (crop.offsetX ?? 0);
+    const offsetY = height * (crop.offsetY ?? 0);
 
-    const sx = Math.max(0, minX - padX);
-    const sy = Math.max(0, minY - padY);
-    const sw = Math.max(2, Math.min(video.videoWidth - sx, width + (padX * 2)));
-    const sh = Math.max(2, Math.min(video.videoHeight - sy, height + (padY * 2)));
+    const centerX = ((minX + maxX) / 2) + offsetX;
+    const centerY = ((minY + maxY) / 2) + offsetY;
+    const targetW = width + (padX * 2);
+    const targetH = height + (padY * 2);
+
+    const sx = Math.max(0, centerX - (targetW / 2));
+    const sy = Math.max(0, centerY - (targetH / 2));
+    const sw = Math.max(2, Math.min(video.videoWidth - sx, targetW));
+    const sh = Math.max(2, Math.min(video.videoHeight - sy, targetH));
 
     offscreenCtx.drawImage(video, sx, sy, sw, sh, 0, 0, 800, 800);
 }
