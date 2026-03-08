@@ -83,9 +83,118 @@ let lastLandmarks = null;
 const regionBuffers = {}; // Stores top 10 sharpest ImageData objects per region
 const MAX_BUFFER_SIZE = 10;
 
+const faceMesh = new FaceMesh({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
+
+faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+});
+
+faceMesh.onResults(onResults);
+
+function onResults(results) {
+    if (isAnalyzing) return;
+    
+    // HARDWARE SYNC: Calculate actual video content dimensions (ignoring letterboxing)
+    if (video.videoWidth > 0) {
+        const containerWidth = video.offsetWidth;
+        const containerHeight = video.offsetHeight;
+        const videoRatio = video.videoWidth / video.videoHeight;
+        const containerRatio = containerWidth / containerHeight;
+
+        let actualWidth, actualHeight;
+        if (containerRatio > videoRatio) {
+            actualHeight = containerHeight;
+            actualWidth = actualHeight * videoRatio;
+        } else {
+            actualWidth = containerWidth;
+            actualHeight = actualWidth / videoRatio;
+        }
+
+        if (canvas.width !== actualWidth || canvas.height !== actualHeight) {
+            canvas.width = actualWidth;
+            canvas.height = actualHeight;
+            canvas.style.width = `${actualWidth}px`;
+            canvas.style.height = `${actualHeight}px`;
+        }
+    }
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
+
+    if (hasFace) {
+        lostFrames = 0;
+        const landmarks = results.multiFaceLandmarks[0];
+        lastLandmarks = landmarks;
+        
+        ctx.save();
+        drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: 'rgba(255,255,255,0.25)', lineWidth: 0.5});
+        drawConnectors(ctx, landmarks, FACEMESH_CONTOURS, {color: '#00d2ff', lineWidth: 1.2});
+        ctx.restore();
+
+        if (scanStartTime > 0) {
+            statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";
+            statusIndicator.classList.add('active');
+            liveRegionRow.classList.remove('hidden');
+
+            const elapsed = Date.now() - scanStartTime;
+            
+            if (elapsed < SCAN_DURATION) {
+                pulseSamples.push({ t: elapsed, g: getForeheadGreen(landmarks, video) });
+                respirationSamples.push({ t: elapsed, y: landmarks[1].y });
+                detectBlink(landmarks);
+                
+                updateLiveRegions(landmarks, video);
+                
+                // LIVE BPM UPDATE
+                if (pulseSamples.length > 60 && pulseSamples.length % 30 === 0) {
+                    const currentBPM = calculateBPM(pulseSamples);
+                    const liveBPMDisplay = document.getElementById('liveBPM');
+                    if (liveBPMDisplay) liveBPMDisplay.textContent = currentBPM;
+                }
+                
+                const remaining = ((SCAN_DURATION - elapsed) / 1000).toFixed(1);
+                timerText.textContent = `${remaining}s`;
+                progressBarFill.style.width = `${(elapsed / SCAN_DURATION) * 100}%`;
+            } else {
+                completeScan();
+            }
+        } else {
+            stabilizationFrames++;
+            statusText.textContent = `STABILIZING... ${Math.round((stabilizationFrames/15)*100)}%`;
+            if (stabilizationFrames >= 15) {
+                scanStartTime = Date.now();
+                analysisOverlay.classList.remove('hidden');
+                
+                REGIONS.forEach(r => {
+                    regionBuffers[r.id] = [];
+                    const indicator = document.getElementById(r.id).parentElement.querySelector('.refining-indicator');
+                    if (indicator) {
+                        indicator.textContent = 'RECONSTRUCTING...';
+                        indicator.style.color = '#00d2ff';
+                    }
+                });
+            }
+        }
+    } else {
+        lostFrames++;
+        if (lostFrames > 10) {
+            statusText.textContent = "SEARCHING FOR SUBJECT...";
+            statusIndicator.classList.remove('active');
+            if (scanStartTime === 0) stabilizationFrames = 0; 
+        }
+    }
+}
+
 /**
  * Solves for the 2D Affine Transform Matrix [a, c, e, b, d, f]
- * that maps source points (p1, p2, p3) to destination points (q1, q2, q3)
+ * with singularity protection.
  */
 function solveAffine(p, q) {
     const matrix = [
@@ -99,7 +208,6 @@ function solveAffine(p, q) {
     
     const rhs = [q[0][0], q[0][1], q[1][0], q[1][1], q[2][0], q[2][1]];
     
-    // Simple Gaussian Elimination for 6x6
     const n = 6;
     for (let i = 0; i < n; i++) {
         let maxRow = i;
@@ -108,6 +216,9 @@ function solveAffine(p, q) {
         }
         [matrix[i], matrix[maxRow]] = [matrix[maxRow], matrix[i]];
         [rhs[i], rhs[maxRow]] = [rhs[maxRow], rhs[i]];
+
+        // Singularity check
+        if (Math.abs(matrix[i][i]) < 1e-10) return [1, 0, 0, 0, 1, 0]; // Identity fallback
 
         for (let k = i + 1; k < n; k++) {
             const c = -matrix[k][i] / matrix[i][i];
@@ -122,13 +233,19 @@ function solveAffine(p, q) {
         for (let j = i + 1; j < n; j++) sum += matrix[i][j] * x[j];
         x[i] = (rhs[i] - sum) / matrix[i][i];
     }
-    return x; // [a, c, e, b, d, f]
+    return x;
 }
 
 /**
  * Performs Geometric Normalization and Sharpness Gating
  */
 function updateLiveRegions(landmarks, video) {
+    // PRE-FLIGHT: Ensure offscreen canvas is ready
+    if (offscreenCanvas.width !== 800) {
+        offscreenCanvas.width = 800;
+        offscreenCanvas.height = 800;
+    }
+
     REGIONS.forEach(r => {
         const liveCanvas = document.getElementById(r.id);
         if (!liveCanvas) return;
@@ -140,7 +257,6 @@ function updateLiveRegions(landmarks, video) {
             regionBuffers[r.id] = [];
         }
 
-        // 1. AFFINE WARPING: Map 3 source landmarks to 3 target points
         const srcPoints = r.anchors.map(idx => ({
             x: landmarks[idx].x * video.videoWidth,
             y: landmarks[idx].y * video.videoHeight
@@ -148,14 +264,7 @@ function updateLiveRegions(landmarks, video) {
         
         const m = solveAffine(srcPoints, r.target);
         
-        // Draw to offscreen buffer first for analysis
-        offscreenCanvas.width = 800; offscreenCanvas.height = 800;
         offscreenCtx.save();
-        // ctx.setTransform(a, b, c, d, e, f) -> canvas uses m11, m12, m21, m22, dx, dy
-        // Our solver returns [a, c, e, b, d, f] where:
-        // u = a*x + c*y + e
-        // v = b*x + d*y + f
-        // Canvas transform order is m11=a, m12=b, m21=c, m22=d, dx=e, dy=f
         offscreenCtx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
         offscreenCtx.drawImage(video, 0, 0);
         offscreenCtx.restore();
@@ -165,26 +274,39 @@ function updateLiveRegions(landmarks, video) {
         const imgData = offscreenCtx.getImageData(300, 300, sampleSize, sampleSize).data;
         let sharpness = 0;
         for (let i = 0; i < imgData.length - 4; i += 4) {
-            sharpness += Math.abs(imgData[i] - imgData[i+4]); // Horizontal gradient
+            sharpness += Math.abs(imgData[i] - imgData[i+4]);
         }
 
-        // 3. BUFFER MANAGEMENT (Keep Top 10)
-        const currentFrame = {
-            score: sharpness,
-            data: offscreenCtx.getImageData(0, 0, 800, 800)
-        };
-
+        // 3. BUFFER MANAGEMENT (Lazy ImageData Allocation)
         const buffer = regionBuffers[r.id];
-        if (buffer.length < MAX_BUFFER_SIZE || sharpness > buffer[buffer.length - 1].score) {
-            buffer.push(currentFrame);
-            buffer.sort((a, b) => b.score - a.score); // Highest first
+        const isSharpEnough = buffer.length < MAX_BUFFER_SIZE || sharpness > buffer[buffer.length - 1].score;
+
+        if (isSharpEnough) {
+            buffer.push({
+                score: sharpness,
+                data: offscreenCtx.getImageData(0, 0, 800, 800)
+            });
+            buffer.sort((a, b) => b.score - a.score);
             if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
             
-            // Visual Update: Show the latest sharpest frame with low opacity for "weaving" look
             liveCtx.globalAlpha = 0.15;
             liveCtx.drawImage(offscreenCanvas, 0, 0);
             liveCtx.globalAlpha = 1.0;
         }
+
+        const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
+        if (indicator) {
+            const count = buffer.length;
+            if (count >= MAX_BUFFER_SIZE) {
+                indicator.textContent = 'ULTRA-HD LOCKED';
+                indicator.style.color = '#55ff55';
+            } else {
+                indicator.textContent = `WEAVING TEXTURE: ${count * 10}%`;
+                indicator.style.color = '#00d2ff';
+            }
+        }
+    });
+}
 
         const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
         if (indicator) {
