@@ -52,14 +52,16 @@ const MAX_BUFFER_SIZE = 10;
 const REGIONS = [
     { 
         id: 'live-Forehead', name: 'Forehead', 
-        indices: [10, 109, 338, 67], 
+        indices: [10, 67, 109, 338, 297], 
         pad: 0.15,
         useBboxCrop: true,
         crop: {
             // Forehead ROI should sit above brows; shift crop upward.
             padX: 0.35,
             padY: 0.45,
-            offsetY: -0.35
+            offsetY: -0.40,
+            minFaceWidthRatio: 0.34,
+            minFaceHeightRatio: 0.20
         },
         anchors: [10, 127, 356], 
         target: [[400, 200], [50, 600], [750, 600]], // Macro Zoom
@@ -95,6 +97,14 @@ const REGIONS = [
         id: 'live-Chin', name: 'Chin', 
         indices: [164, 18, 200, 152], 
         pad: 0.2,
+        useBboxCrop: true,
+        crop: {
+            padX: 0.28,
+            padY: 0.35,
+            offsetY: 0.30,
+            minFaceWidthRatio: 0.28,
+            minFaceHeightRatio: 0.18
+        },
         anchors: [164, 57, 287], 
         target: [[400, 200], [100, 600], [700, 600]], // Macro Zoom
         quality: 1.0
@@ -304,11 +314,15 @@ function drawRegionFallback(region, landmarks, video) {
     const padY = height * (crop.padY ?? region.pad ?? 0.2);
     const offsetX = width * (crop.offsetX ?? 0);
     const offsetY = height * (crop.offsetY ?? 0);
+    const faceWidth = Math.abs((landmarks[454]?.x ?? 0.8) - (landmarks[234]?.x ?? 0.2)) * video.videoWidth;
+    const faceHeight = Math.abs((landmarks[152]?.y ?? 0.85) - (landmarks[10]?.y ?? 0.15)) * video.videoHeight;
 
     const centerX = ((minX + maxX) / 2) + offsetX;
     const centerY = ((minY + maxY) / 2) + offsetY;
-    const targetW = width + (padX * 2);
-    const targetH = height + (padY * 2);
+    const minW = (crop.minFaceWidthRatio ?? 0) * faceWidth;
+    const minH = (crop.minFaceHeightRatio ?? 0) * faceHeight;
+    const targetW = Math.max(width + (padX * 2), minW || 0);
+    const targetH = Math.max(height + (padY * 2), minH || 0);
 
     const sx = Math.max(0, centerX - (targetW / 2));
     const sy = Math.max(0, centerY - (targetH / 2));
@@ -346,13 +360,22 @@ function updateLiveRegions(landmarks, video) {
         const sampleSize = 200;
         const imgData = offscreenCtx.getImageData(300, 300, sampleSize, sampleSize).data;
         let sharpness = 0;
-        for (let i = 0; i < imgData.length - 4; i += 4) sharpness += Math.abs(imgData[i] - imgData[i+4]);
+        const rowStride = sampleSize * 4;
+        for (let y = 0; y < sampleSize - 1; y++) {
+            for (let x = 0; x < sampleSize - 1; x++) {
+                const i = ((y * sampleSize) + x) * 4;
+                const lum = (0.299 * imgData[i]) + (0.587 * imgData[i + 1]) + (0.114 * imgData[i + 2]);
+                const lumX = (0.299 * imgData[i + 4]) + (0.587 * imgData[i + 5]) + (0.114 * imgData[i + 6]);
+                const lumY = (0.299 * imgData[i + rowStride]) + (0.587 * imgData[i + rowStride + 1]) + (0.114 * imgData[i + rowStride + 2]);
+                sharpness += Math.abs(lum - lumX) + Math.abs(lum - lumY);
+            }
+        }
 
         const qualityMultiplier = r.quality || 1.0; 
 
         const buffer = regionBuffers[r.id];
         if (buffer.length < MAX_BUFFER_SIZE || (sharpness / qualityMultiplier) > buffer[buffer.length - 1].score) {
-            buffer.push({ score: sharpness / qualityMultiplier, data: offscreenCtx.getImageData(0, 0, 800, 800) });
+            buffer.push({ score: sharpness / qualityMultiplier, data: offscreenCtx.getImageData(0, 0, 800, 800), ts: Date.now() });
             buffer.sort((a, b) => b.score - a.score);
             if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
             
@@ -370,6 +393,12 @@ function updateLiveRegions(landmarks, video) {
 }
 
 function calculateMedianImageData(buffer) {
+    if (buffer.length === 0) return null;
+    // Avoid blur from mixing different poses/occlusions (e.g., glasses on/off); use sharpest frame.
+    return buffer[0].data;
+}
+
+function calculateLegacyMedianImageData(buffer) {
     if (buffer.length === 0) return null;
     const width = buffer[0].data.width, height = buffer[0].data.height, size = width * height * 4;
     const result = new Uint8ClampedArray(size), numFrames = buffer.length;
@@ -404,25 +433,8 @@ async function completeScan() {
     isAnalyzing = true;
     scannerView.classList.add('hidden');
     liveRegionRow.classList.add('hidden');
-    regionImagesGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 2rem;"><h3>GENERATING ULTRA-HD RECONSTRUCTIONS...</h3><div class="circular-loader" style="margin: 1rem auto;"></div></div>';
-
-    setTimeout(() => {
-        regionImagesGrid.innerHTML = '';
-        REGIONS.forEach(r => {
-            const liveCanvas = document.getElementById(r.id);
-            const medianData = calculateMedianImageData(regionBuffers[r.id]);
-            if (medianData) liveCanvas.getContext('2d').putImageData(medianData, 0, 0);
-            const container = document.createElement('div');
-            container.className = 'region-item';
-            const img = document.createElement('img');
-            img.src = liveCanvas.toDataURL('image/png'); 
-            const label = document.createElement('span');
-            label.textContent = r.name;
-            container.appendChild(img); container.appendChild(label);
-            regionImagesGrid.appendChild(container);
-        });
-        regionConfirmationView.classList.remove('hidden');
-    }, 100);
+    // Simplified 2-step UX: scan -> analysis/result.
+    await proceedToAnalysis();
 }
 
 async function proceedToAnalysis() {
@@ -511,22 +523,117 @@ function detrend(arr, w) {
 
 function showResults(data, vitals) {
     if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
-    resultsSection.classList.remove('hidden'); resultsGrid.innerHTML = '';
+    resultsSection.classList.remove('hidden');
+    resultsGrid.innerHTML = '';
+
     let total = 0, count = 0;
-    Object.values(data.pillars || {}).forEach(p => { if(p) { total += p.score; count++; } });
+    Object.values(data.pillars || {}).forEach(p => {
+        if (p && typeof p.score === 'number') {
+            total += p.score;
+            count++;
+        }
+    });
+
+    const overall = count > 0 ? Math.round(total / count) : 85;
     const hero = document.createElement('div');
-    hero.className = 'wellness-hero'; hero.style.gridColumn = "1 / -1";
-    hero.innerHTML = `<h1 style="font-size: 5rem;">${count > 0 ? Math.round(total / count) : 85}</h1>`;
+    hero.className = 'wellness-hero';
+    hero.style.gridColumn = "1 / -1";
+    hero.style.background = 'rgba(255,255,255,0.04)';
+    hero.style.border = '1px solid rgba(255,255,255,0.1)';
+    hero.innerHTML = `
+        <h1 style="font-size: 4.2rem; line-height: 1; margin-bottom: 8px;">${overall}</h1>
+        <p style="letter-spacing: 2px; font-size: 0.75rem; color: #aaa;">OVERALL WELLNESS INDEX</p>
+    `;
     resultsGrid.appendChild(hero);
-    const foot = document.createElement('div'); foot.style.gridColumn = "1 / -1";
-    foot.appendChild(resetBtn); resultsGrid.appendChild(foot);
+
+    const vitalsCard = document.createElement('div');
+    vitalsCard.className = 'result-card';
+    vitalsCard.style.background = 'rgba(255,255,255,0.04)';
+    vitalsCard.style.border = '1px solid rgba(255,255,255,0.1)';
+    vitalsCard.innerHTML = `
+        <h3 style="margin-bottom: 12px; font-size: 0.9rem; letter-spacing: 1px;">Scan Biometrics</h3>
+        <p style="margin: 4px 0;">BPM: <strong>${vitals.bpm}</strong></p>
+        <p style="margin: 4px 0;">Respiration: <strong>${vitals.resp}</strong> br/m</p>
+        <p style="margin: 4px 0;">Blink Rate: <strong>${vitals.blinks}</strong> blinks/m</p>
+    `;
+    resultsGrid.appendChild(vitalsCard);
+
+    const metaCard = document.createElement('div');
+    metaCard.className = 'result-card';
+    metaCard.style.background = 'rgba(255,255,255,0.04)';
+    metaCard.style.border = '1px solid rgba(255,255,255,0.1)';
+    const demographics = data.demographics || {};
+    const summary = data.dermatology_summary || {};
+    metaCard.innerHTML = `
+        <h3 style="margin-bottom: 12px; font-size: 0.9rem; letter-spacing: 1px;">Clinical Summary</h3>
+        <p style="margin: 4px 0;">Confidence: <strong>${data.confidence ?? '--'}%</strong></p>
+        <p style="margin: 4px 0;">Age/Gender: <strong>${demographics.age ?? '--'} / ${demographics.gender ?? '--'}</strong></p>
+        <p style="margin: 4px 0;">Finding: <strong>${summary.primary_finding || 'NA'}</strong></p>
+    `;
+    resultsGrid.appendChild(metaCard);
+
+    Object.entries(data.pillars || {}).forEach(([pillarName, pillar]) => {
+        if (!pillar) return;
+        const card = document.createElement('div');
+        card.className = 'result-card';
+        card.style.background = 'rgba(255,255,255,0.03)';
+        card.style.border = '1px solid rgba(255,255,255,0.08)';
+        card.innerHTML = `
+            <h3 style="margin-bottom: 8px; font-size: 0.85rem;">${pillarName.replaceAll('_', ' ')}</h3>
+            <p style="margin: 3px 0;">Score: <strong>${pillar.score}</strong></p>
+            <p style="margin: 3px 0;">State: <strong>${pillar.state}</strong></p>
+            <p style="margin: 3px 0;">Driver Region: <strong>${pillar.driver_region || 'NA'}</strong></p>
+            <p style="margin: 8px 0 0; color: #b9b9b9; font-size: 0.8rem;">${pillar.insight || ''}</p>
+        `;
+        resultsGrid.appendChild(card);
+    });
+
+    const foot = document.createElement('div');
+    foot.style.gridColumn = "1 / -1";
+    foot.appendChild(resetBtn);
+    resultsGrid.appendChild(foot);
 }
 
 function resetScanner() {
     isAnalyzing = false;
     resultsSection.classList.add('hidden'); analysisView.classList.add('hidden'); regionConfirmationView.classList.add('hidden');
     setupView.classList.remove('hidden'); analysisOverlay.classList.add('hidden'); liveRegionRow.classList.add('hidden');
-    scanStartTime = 0; stabilizationFrames = 0; pulseSamples = []; respirationSamples = []; blinkCount = 0;
+    scanStartTime = 0;
+    stabilizationFrames = 0;
+    lostFrames = 0;
+    lastLandmarks = null;
+    eyeClosed = false;
+    pulseSamples = [];
+    respirationSamples = [];
+    blinkCount = 0;
+
+    // Reset visible scan/analysis UI state so next run starts clean.
+    statusText.textContent = "INITIALIZING...";
+    statusIndicator.classList.remove('active');
+    timerText.textContent = `${(SCAN_DURATION / 1000).toFixed(1)}s`;
+    progressBarFill.style.width = '0%';
+    deepProgressFill.style.width = '0%';
+    previewBPM.textContent = '--';
+    previewResp.textContent = '--';
+    previewBlink.textContent = '--';
+    const liveBPM = document.getElementById('liveBPM');
+    if (liveBPM) liveBPM.textContent = '--';
+
+    // Clear per-region image buffers and canvases.
+    REGIONS.forEach(r => {
+        regionBuffers[r.id] = [];
+        const liveCanvas = document.getElementById(r.id);
+        if (liveCanvas) {
+            const ctx = liveCanvas.getContext('2d');
+            ctx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
+        }
+        const indicator = liveCanvas?.parentElement?.querySelector('.refining-indicator');
+        if (indicator) {
+            indicator.textContent = 'RECONSTRUCTING...';
+            indicator.style.color = '#00d2ff';
+        }
+    });
+
     if (video.srcObject) { video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null; }
 }
 
