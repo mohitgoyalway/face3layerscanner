@@ -48,14 +48,14 @@ let lastLandmarks = null;
 const regionBuffers = {}; 
 const MAX_BUFFER_SIZE = 10;
 
-// CLINICAL REGION DEFINITIONS (Universal Proportional Scaling)
+// CLINICAL REGION DEFINITIONS (Proportional Similarity Mapping)
 const REGIONS = [
     { 
         id: 'live-Forehead', name: 'Forehead', 
         indices: [10, 109, 338, 67], 
         pad: 0.15,
         anchors: [10, 127, 356], 
-        target: [[400, 350], [250, 400], [550, 400]], // Centered and de-zoomed
+        target: [[400, 200], [150, 450], [650, 450]], // Proportional 1:1.5 ratio
         quality: 1.0
     },
     { 
@@ -63,23 +63,23 @@ const REGIONS = [
         indices: [168, 6, 197, 2, 102, 331], 
         pad: 0.2,
         anchors: [168, 102, 331], 
-        target: [[400, 350], [330, 550], [470, 550]], 
+        target: [[400, 250], [280, 550], [520, 550]], 
         quality: 1.0
     },
     { 
         id: 'live-Left-Cheek', name: 'Left Cheek', 
         indices: [116, 117, 118, 101, 123], 
         pad: 0.25,
-        anchors: [123, 117, 152], // Outer-Eye, Inner-Eye, Chin
-        target: [[200, 250], [450, 250], [300, 800]], // Proportional de-zoomed mapping
+        anchors: [123, 117, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Stable)
+        target: [[150, 300], [450, 300], [400, 550]], // Natural cheek triangle
         quality: 1.5
     },
     { 
         id: 'live-Right-Cheek', name: 'Right Cheek', 
         indices: [345, 346, 347, 330, 352], 
         pad: 0.25,
-        anchors: [352, 346, 152], // Outer-Eye, Inner-Eye, Chin
-        target: [[600, 250], [350, 250], [500, 800]], // Proportional de-zoomed mapping
+        anchors: [352, 346, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Stable)
+        target: [[650, 300], [350, 300], [400, 550]], // Natural cheek triangle
         quality: 1.5
     },
     { 
@@ -87,7 +87,7 @@ const REGIONS = [
         indices: [164, 18, 200, 152], 
         pad: 0.2,
         anchors: [164, 57, 287], 
-        target: [[400, 350], [250, 500], [550, 500]],
+        target: [[400, 300], [200, 500], [600, 500]],
         quality: 1.0
     }
 ];
