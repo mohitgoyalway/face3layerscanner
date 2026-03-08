@@ -48,42 +48,47 @@ let lastLandmarks = null;
 const regionBuffers = {}; 
 const MAX_BUFFER_SIZE = 10;
 
-// CLINICAL REGION DEFINITIONS (Ultra-Stable "Fat Triangle" Anchors)
+// CLINICAL REGION DEFINITIONS (Universal Proportional Scaling)
 const REGIONS = [
     { 
         id: 'live-Forehead', name: 'Forehead', 
         indices: [10, 109, 338, 67], 
         pad: 0.15,
-        anchors: [10, 127, 356], // Top-Center, Far-Left Forehead, Far-Right Forehead
-        target: [[400, 150], [200, 500], [600, 500]] // Stable wide triangle
+        anchors: [10, 127, 356], 
+        target: [[400, 350], [250, 400], [550, 400]], // Centered and de-zoomed
+        quality: 1.0
     },
     { 
         id: 'live-Nose', name: 'Nose', 
         indices: [168, 6, 197, 2, 102, 331], 
         pad: 0.2,
-        anchors: [168, 102, 331], // Bridge, Left Nostril, Right Nostril
-        target: [[400, 200], [330, 600], [470, 600]]
+        anchors: [168, 102, 331], 
+        target: [[400, 350], [330, 550], [470, 550]], 
+        quality: 1.0
     },
     { 
         id: 'live-Left-Cheek', name: 'Left Cheek', 
         indices: [116, 117, 118, 101, 123], 
         pad: 0.25,
-        anchors: [123, 117, 152], // Outer-Eye, Inner-Eye, Center-Chin (Very stable)
-        target: [[150, 200], [400, 250], [350, 750]] // Proportional mapping
+        anchors: [123, 117, 152], // Outer-Eye, Inner-Eye, Chin
+        target: [[200, 250], [450, 250], [300, 800]], // Proportional de-zoomed mapping
+        quality: 1.5
     },
     { 
         id: 'live-Right-Cheek', name: 'Right Cheek', 
         indices: [345, 346, 347, 330, 352], 
         pad: 0.25,
-        anchors: [352, 346, 152], // Outer-Eye, Inner-Eye, Center-Chin (Very stable)
-        target: [[650, 200], [400, 250], [450, 750]] // Proportional mapping
+        anchors: [352, 346, 152], // Outer-Eye, Inner-Eye, Chin
+        target: [[600, 250], [350, 250], [500, 800]], // Proportional de-zoomed mapping
+        quality: 1.5
     },
     { 
         id: 'live-Chin', name: 'Chin', 
         indices: [164, 18, 200, 152], 
         pad: 0.2,
-        anchors: [164, 57, 287], // Philtrum-base, Left-mouth, Right-mouth
-        target: [[400, 250], [250, 450], [550, 450]]
+        anchors: [164, 57, 287], 
+        target: [[400, 350], [250, 500], [550, 500]],
+        quality: 1.0
     }
 ];
 
@@ -279,9 +284,8 @@ function updateLiveRegions(landmarks, video) {
         let sharpness = 0;
         for (let i = 0; i < imgData.length - 4; i += 4) sharpness += Math.abs(imgData[i] - imgData[i+4]);
 
-        // TIGHTEN GATING: Cheeks are smoother, so they need a stricter "quality bar"
-        const isCheek = r.id.includes('Cheek');
-        const qualityMultiplier = isCheek ? 1.5 : 1.0; 
+        // UNIVERSAL GATING: Each region now has its own quality bar
+        const qualityMultiplier = r.quality || 1.0; 
 
         const buffer = regionBuffers[r.id];
         if (buffer.length < MAX_BUFFER_SIZE || (sharpness / qualityMultiplier) > buffer[buffer.length - 1].score) {
