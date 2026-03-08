@@ -83,6 +83,8 @@ let lastLandmarks = null;
 const regionBuffers = {}; // Stores top 10 sharpest ImageData objects per region
 const MAX_BUFFER_SIZE = 10;
 
+/* ---------------- MEDIAPIPE CORE ---------------- */
+
 const faceMesh = new FaceMesh({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
 });
@@ -99,7 +101,7 @@ faceMesh.onResults(onResults);
 function onResults(results) {
     if (isAnalyzing) return;
     
-    // HARDWARE SYNC: Calculate actual video content dimensions (ignoring letterboxing)
+    // HARDWARE SYNC: Calculate actual video content dimensions
     if (video.videoWidth > 0) {
         const containerWidth = video.offsetWidth;
         const containerHeight = video.offsetHeight;
@@ -192,9 +194,10 @@ function onResults(results) {
     }
 }
 
+/* ---------------- CLINICAL HD RECONSTRUCTION ---------------- */
+
 /**
  * Solves for the 2D Affine Transform Matrix [a, c, e, b, d, f]
- * with singularity protection.
  */
 function solveAffine(p, q) {
     const matrix = [
@@ -217,8 +220,7 @@ function solveAffine(p, q) {
         [matrix[i], matrix[maxRow]] = [matrix[maxRow], matrix[i]];
         [rhs[i], rhs[maxRow]] = [rhs[maxRow], rhs[i]];
 
-        // Singularity check
-        if (Math.abs(matrix[i][i]) < 1e-10) return [1, 0, 0, 0, 1, 0]; // Identity fallback
+        if (Math.abs(matrix[i][i]) < 1e-10) return [1, 0, 0, 0, 1, 0]; // Fallback
 
         for (let k = i + 1; k < n; k++) {
             const c = -matrix[k][i] / matrix[i][i];
@@ -236,11 +238,7 @@ function solveAffine(p, q) {
     return x;
 }
 
-/**
- * Performs Geometric Normalization and Sharpness Gating
- */
 function updateLiveRegions(landmarks, video) {
-    // PRE-FLIGHT: Ensure offscreen canvas is ready
     if (offscreenCanvas.width !== 800) {
         offscreenCanvas.width = 800;
         offscreenCanvas.height = 800;
@@ -269,7 +267,6 @@ function updateLiveRegions(landmarks, video) {
         offscreenCtx.drawImage(video, 0, 0);
         offscreenCtx.restore();
 
-        // 2. SHARPNESS EVALUATION (Laplacian proxy)
         const sampleSize = 200;
         const imgData = offscreenCtx.getImageData(300, 300, sampleSize, sampleSize).data;
         let sharpness = 0;
@@ -277,15 +274,11 @@ function updateLiveRegions(landmarks, video) {
             sharpness += Math.abs(imgData[i] - imgData[i+4]);
         }
 
-        // 3. BUFFER MANAGEMENT (Lazy ImageData Allocation)
         const buffer = regionBuffers[r.id];
         const isSharpEnough = buffer.length < MAX_BUFFER_SIZE || sharpness > buffer[buffer.length - 1].score;
 
         if (isSharpEnough) {
-            buffer.push({
-                score: sharpness,
-                data: offscreenCtx.getImageData(0, 0, 800, 800)
-            });
+            buffer.push({ score: sharpness, data: offscreenCtx.getImageData(0, 0, 800, 800) });
             buffer.sort((a, b) => b.score - a.score);
             if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
             
@@ -308,20 +301,31 @@ function updateLiveRegions(landmarks, video) {
     });
 }
 
-        const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
-        if (indicator) {
-            const count = buffer.length;
-            if (count >= MAX_BUFFER_SIZE) {
-                indicator.textContent = 'ULTRA-HD LOCKED';
-                indicator.style.color = '#55ff55';
-            } else {
-                indicator.textContent = `WEAVING TEXTURE: ${count * 10}%`;
-                indicator.style.color = '#00d2ff';
+function calculateMedianImageData(buffer) {
+    if (buffer.length === 0) return null;
+    if (buffer.length === 1) return buffer[0].data;
+
+    const width = buffer[0].data.width;
+    const height = buffer[0].data.height;
+    const size = width * height * 4;
+    const result = new Uint8ClampedArray(size);
+    const numFrames = buffer.length;
+
+    for (let i = 0; i < size; i += 4) {
+        for (let channel = 0; channel < 3; channel++) {
+            const values = [];
+            for (let f = 0; f < numFrames; f++) {
+                values.push(buffer[f].data.data[i + channel]);
             }
+            values.sort((a, b) => a - b);
+            result[i + channel] = values[Math.floor(numFrames / 2)];
         }
-    });
+        result[i + 3] = 255; 
+    }
+    return new ImageData(result, width, height);
 }
 
+/* ---------------- SCAN LIFECYCLE ---------------- */
 
 function detectBlink(landmarks) {
     const verticalDist = Math.abs(landmarks[159].y - landmarks[145].y);
@@ -343,37 +347,6 @@ function getForeheadGreen(landmarks, video) {
     return g / (d.length / 4);
 }
 
-/**
- * Computes a pixel-wise median across multiple ImageDatas to remove sensor noise
- */
-function calculateMedianImageData(buffer) {
-    if (buffer.length === 0) return null;
-    if (buffer.length === 1) return buffer[0].data;
-
-    const width = buffer[0].data.width;
-    const height = buffer[0].data.height;
-    const size = width * height * 4;
-    const result = new Uint8ClampedArray(size);
-    const numFrames = buffer.length;
-
-    // Process in chunks to keep UI responsive
-    for (let i = 0; i < size; i += 4) {
-        // We only need to compute median for R, G, B. A is always 255.
-        for (let channel = 0; channel < 3; channel++) {
-            const values = [];
-            for (let f = 0; f < numFrames; f++) {
-                values.push(buffer[f].data.data[i + channel]);
-            }
-            // Simple sort for small array (10 elements)
-            values.sort((a, b) => a - b);
-            result[i + channel] = values[Math.floor(numFrames / 2)];
-        }
-        result[i + 3] = 255; // Alpha
-    }
-
-    return new ImageData(result, width, height);
-}
-
 async function completeScan() {
     isAnalyzing = true;
     scannerView.classList.add('hidden');
@@ -381,16 +354,11 @@ async function completeScan() {
     
     regionImagesGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 2rem;"><h3>GENERATING ULTRA-HD RECONSTRUCTIONS...</h3><div class="circular-loader" style="margin: 1rem auto;"></div></div>';
 
-    // Small delay to allow loader to show
     setTimeout(() => {
         regionImagesGrid.innerHTML = '';
-
         REGIONS.forEach(r => {
             const liveCanvas = document.getElementById(r.id);
-            const buffer = regionBuffers[r.id];
-            
-            // Perform Median Stacking
-            const medianData = calculateMedianImageData(buffer);
+            const medianData = calculateMedianImageData(regionBuffers[r.id]);
             if (medianData) {
                 const ctx = liveCanvas.getContext('2d');
                 ctx.putImageData(medianData, 0, 0);
@@ -406,7 +374,6 @@ async function completeScan() {
             container.appendChild(label);
             regionImagesGrid.appendChild(container);
         });
-
         regionConfirmationView.classList.remove('hidden');
     }, 100);
 }
@@ -461,44 +428,31 @@ async function proceedToAnalysis() {
     }
 }
 
-function calculateBPM(samples) {
-    if (samples.length < 100) return 72; // Need more data for accuracy
+/* ---------------- MATH UTILS ---------------- */
 
-    // 1. Extract and normalize the green channel signal
+function calculateBPM(samples) {
+    if (samples.length < 100) return 72;
     const signal = samples.map(s => s.g);
-    
-    // 2. Apply Bandpass Filter (0.75Hz to 2.5Hz approx 45-150 BPM)
     const filtered = detrend(signal, 5);
     const smoothed = movingAverage(filtered, 3);
-
-    // 3. Peak Detection with Adaptive Threshold
     let peaks = 0;
     const threshold = getStandardDeviation(smoothed) * 0.8;
-    
     for (let i = 2; i < smoothed.length - 2; i++) {
-        if (smoothed[i] > smoothed[i - 1] && 
-            smoothed[i] > smoothed[i + 1] && 
-            smoothed[i] > threshold) {
-            peaks++;
-            i += 5; // Refractory period to avoid double-counting same beat
+        if (smoothed[i] > smoothed[i - 1] && smoothed[i] > smoothed[i + 1] && smoothed[i] > threshold) {
+            peaks++; i += 5;
         }
     }
-
-    // 4. Calculate BPM based on actual elapsed time
     const durationMs = samples[samples.length - 1].t - samples[0].t;
     const bpm = Math.round((peaks / (durationMs / 1000)) * 60);
-
-    return Math.min(Math.max(bpm, 55), 110); // Clamp to realistic human range
+    return Math.min(Math.max(bpm, 55), 110);
 }
 
 function movingAverage(arr, window) {
     let result = [];
     for (let i = 0; i < arr.length; i++) {
-        let sum = 0;
-        let count = 0;
+        let sum = 0, count = 0;
         for (let j = Math.max(0, i - window); j <= Math.min(arr.length - 1, i + window); j++) {
-            sum += arr[j];
-            count++;
+            sum += arr[j]; count++;
         }
         result.push(sum / count);
     }
@@ -530,6 +484,8 @@ function detrend(arr, w) {
     }
     return res;
 }
+
+/* ---------------- RESULTS UI ---------------- */
 
 function showResults(data, vitals) {
     if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
@@ -611,46 +567,28 @@ function resetScanner() {
     setupView.classList.remove('hidden');
     analysisOverlay.classList.add('hidden');
     liveRegionRow.classList.add('hidden');
-    scanStartTime = 0;
-    stabilizationFrames = 0;
+    scanStartTime = 0; stabilizationFrames = 0;
     pulseSamples = []; respirationSamples = []; blinkCount = 0;
-    if (video.srcObject) {
-        video.srcObject.getTracks().forEach(track => track.stop());
-        video.srcObject = null;
-    }
+    if (video.srcObject) { video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null; }
 }
 
 startBtn.addEventListener('click', async () => {
     setupView.classList.add('hidden');
     scannerView.classList.remove('hidden');
     
-    const constraints = {
-        video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 30 }
-        }
-    };
-
     try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } } });
         video.srcObject = stream;
         video.play();
         
         async function loop() {
-            if (!isAnalyzing && video.readyState >= 2) {
-                await faceMesh.send({image: video});
-            }
+            if (!isAnalyzing && video.readyState >= 2) await faceMesh.send({image: video});
             requestAnimationFrame(loop);
         }
         loop();
     } catch (e) {
-        console.error("HD Camera failed:", e);
-        alert("Could not access HD camera. Using standard resolution.");
-        new Camera(video, { 
-            onFrame: async () => { await faceMesh.send({image: video}); }, 
-            width: 1280, height: 720 
-        }).start();
+        alert("HD Camera failed. Using standard resolution.");
+        new Camera(video, { onFrame: async () => { await faceMesh.send({image: video}); }, width: 1280, height: 720 }).start();
     }
 });
 
