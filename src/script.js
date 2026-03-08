@@ -70,6 +70,7 @@ const REGIONS = [
         id: 'live-Left-Cheek', name: 'Left Cheek', 
         indices: [116, 117, 118, 101, 123], 
         pad: 0.25,
+        useBboxCrop: true,
         anchors: [123, 117, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[100, 300], [500, 350], [400, 650]], // Proportional Zoom
         quality: 1.5
@@ -78,6 +79,7 @@ const REGIONS = [
         id: 'live-Right-Cheek', name: 'Right Cheek', 
         indices: [345, 346, 347, 330, 352], 
         pad: 0.25,
+        useBboxCrop: true,
         anchors: [352, 346, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[700, 300], [300, 350], [400, 650]], // Proportional Zoom
         quality: 1.5
@@ -317,12 +319,12 @@ function updateLiveRegions(landmarks, video) {
         offscreenCtx.clearRect(0, 0, 800, 800);
 
         const srcArea = triangleArea(srcPoints[0], srcPoints[1], srcPoints[2]);
-        if (srcArea > 10 && isValidTransform(m)) {
+        if (!r.useBboxCrop && srcArea > 10 && isValidTransform(m)) {
             offscreenCtx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
             offscreenCtx.drawImage(video, 0, 0);
             offscreenCtx.setTransform(1, 0, 0, 1, 0, 0);
         } else {
-            // Fallback avoids catastrophic shearing/flipping when anchors are unstable.
+            // BBox path avoids catastrophic shearing/flipping for unstable regions (especially cheeks).
             drawRegionFallback(r, landmarks, video);
         }
 
