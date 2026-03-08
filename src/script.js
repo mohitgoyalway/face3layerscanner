@@ -43,9 +43,12 @@ let scanStartTime = 0;
 let stabilizationFrames = 0;
 let lostFrames = 0;
 let lastLandmarks = null;
+let captureGateState = { ok: false, reasons: [] };
 
 // HD BUFFERING
 const regionBuffers = {}; 
+const regionLocks = {};
+const previousSamples = {};
 const MAX_BUFFER_SIZE = 10;
 
 // CLINICAL REGION DEFINITIONS (Rigid Similarity & Consistent Zoom)
@@ -65,7 +68,8 @@ const REGIONS = [
         },
         anchors: [10, 127, 356], 
         target: [[400, 200], [50, 600], [750, 600]], // Macro Zoom
-        quality: 1.0
+        quality: 1.0,
+        lockThreshold: 78
     },
     { 
         id: 'live-Nose', name: 'Nose', 
@@ -73,7 +77,8 @@ const REGIONS = [
         pad: 0.2,
         anchors: [168, 102, 331], 
         target: [[400, 200], [200, 650], [600, 650]], // Macro Zoom
-        quality: 1.0
+        quality: 1.0,
+        lockThreshold: 80
     },
     { 
         id: 'live-Left-Cheek', name: 'Left Cheek', 
@@ -82,7 +87,8 @@ const REGIONS = [
         useBboxCrop: true,
         anchors: [123, 117, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[100, 300], [500, 350], [400, 650]], // Proportional Zoom
-        quality: 1.5
+        quality: 1.5,
+        lockThreshold: 82
     },
     { 
         id: 'live-Right-Cheek', name: 'Right Cheek', 
@@ -91,7 +97,8 @@ const REGIONS = [
         useBboxCrop: true,
         anchors: [352, 346, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[700, 300], [300, 350], [400, 650]], // Proportional Zoom
-        quality: 1.5
+        quality: 1.5,
+        lockThreshold: 82
     },
     { 
         id: 'live-Chin', name: 'Chin', 
@@ -107,7 +114,8 @@ const REGIONS = [
         },
         anchors: [164, 57, 287], 
         target: [[400, 200], [100, 600], [700, 600]], // Macro Zoom
-        quality: 1.0
+        quality: 1.0,
+        lockThreshold: 80
     }
 ];
 
@@ -209,6 +217,7 @@ function onResults(results) {
             statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";
             statusIndicator.classList.add('active');
             liveRegionRow.classList.remove('hidden');
+            captureGateState = computeCaptureGate(landmarks, video);
 
             const elapsed = Date.now() - scanStartTime;
             if (elapsed < SCAN_DURATION) {
@@ -235,7 +244,11 @@ function onResults(results) {
             if (stabilizationFrames >= 15) {
                 scanStartTime = Date.now();
                 analysisOverlay.classList.remove('hidden');
-                REGIONS.forEach(r => regionBuffers[r.id] = []);
+                REGIONS.forEach(r => {
+                    regionBuffers[r.id] = [];
+                    regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
+                    previousSamples[r.id] = null;
+                });
             }
         }
     } else {
@@ -332,6 +345,106 @@ function drawRegionFallback(region, landmarks, video) {
     offscreenCtx.drawImage(video, sx, sy, sw, sh, 0, 0, 800, 800);
 }
 
+function clamp01(v) {
+    return Math.max(0, Math.min(1, v));
+}
+
+function computeCaptureGate(landmarks, video) {
+    const faceWidth = Math.abs((landmarks[454]?.x ?? 0.8) - (landmarks[234]?.x ?? 0.2));
+    const faceHeight = Math.abs((landmarks[152]?.y ?? 0.85) - (landmarks[10]?.y ?? 0.15));
+    const nose = landmarks[1];
+    const left = landmarks[234];
+    const right = landmarks[454];
+    const top = landmarks[10];
+    const chin = landmarks[152];
+
+    const leftDist = Math.abs((nose?.x ?? 0.5) - (left?.x ?? 0.2));
+    const rightDist = Math.abs((right?.x ?? 0.8) - (nose?.x ?? 0.5));
+    const yawAsymmetry = Math.abs(leftDist - rightDist) / Math.max(1e-6, leftDist + rightDist);
+    const noseVertical = ((nose?.y ?? 0.5) - (top?.y ?? 0.15)) / Math.max(1e-6, (chin?.y ?? 0.85) - (top?.y ?? 0.15));
+    const pitchDeviation = Math.abs(noseVertical - 0.52);
+
+    const reasons = [];
+    if (faceWidth < 0.24) reasons.push("Move closer");
+    if (faceWidth > 0.72) reasons.push("Move slightly back");
+    if (faceHeight < 0.30) reasons.push("Center face vertically");
+    if (yawAsymmetry > 0.26) reasons.push("Face camera straight");
+    if (pitchDeviation > 0.24) reasons.push("Keep head level");
+
+    return {
+        ok: reasons.length === 0,
+        reasons
+    };
+}
+
+function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
+    const data = imgData;
+    const pixelCount = sampleSize * sampleSize;
+    const rowStride = sampleSize * 4;
+
+    let lumSum = 0;
+    let lumSqSum = 0;
+    let gradSum = 0;
+    let brightCount = 0;
+    let darkCount = 0;
+    let motionDiffSum = 0;
+
+    const prev = previousSamples[regionId];
+    const hasPrev = prev && prev.length === data.length;
+
+    for (let y = 0; y < sampleSize - 1; y++) {
+        for (let x = 0; x < sampleSize - 1; x++) {
+            const i = ((y * sampleSize) + x) * 4;
+            const lum = (0.299 * data[i]) + (0.587 * data[i + 1]) + (0.114 * data[i + 2]);
+            const lumX = (0.299 * data[i + 4]) + (0.587 * data[i + 5]) + (0.114 * data[i + 6]);
+            const lumY = (0.299 * data[i + rowStride]) + (0.587 * data[i + rowStride + 1]) + (0.114 * data[i + rowStride + 2]);
+
+            lumSum += lum;
+            lumSqSum += (lum * lum);
+            gradSum += Math.abs(lum - lumX) + Math.abs(lum - lumY);
+            if (lum > 245) brightCount++;
+            if (lum < 28) darkCount++;
+
+            if (hasPrev) {
+                const prevLum = (0.299 * prev[i]) + (0.587 * prev[i + 1]) + (0.114 * prev[i + 2]);
+                motionDiffSum += Math.abs(lum - prevLum);
+            }
+        }
+    }
+
+    // Cache this sample for motion estimate in the next frame.
+    previousSamples[regionId] = new Uint8ClampedArray(data);
+
+    const validPixels = (sampleSize - 1) * (sampleSize - 1);
+    const meanLum = lumSum / Math.max(1, validPixels);
+    const variance = Math.max(0, (lumSqSum / Math.max(1, validPixels)) - (meanLum * meanLum));
+    const contrastStd = Math.sqrt(variance);
+    const gradMean = gradSum / Math.max(1, (validPixels * 2));
+    const glareFrac = brightCount / Math.max(1, validPixels);
+    const darkFrac = darkCount / Math.max(1, validPixels);
+    const motionMean = hasPrev ? (motionDiffSum / Math.max(1, validPixels)) : 0;
+
+    const sharpnessScore = clamp01(gradMean / 26);
+    const contrastScore = clamp01(contrastStd / 42);
+    const exposureScore = clamp01(1 - (Math.abs(meanLum - 132) / 132));
+    const glareScore = clamp01(1 - (glareFrac / 0.09));
+    const occlusionScore = clamp01(1 - (darkFrac / 0.35));
+    const stabilityScore = clamp01(1 - (motionMean / 22));
+    const qualityScore = (
+        (sharpnessScore * 0.35) +
+        (contrastScore * 0.15) +
+        (exposureScore * 0.15) +
+        (glareScore * 0.10) +
+        (occlusionScore * 0.10) +
+        (stabilityScore * 0.15)
+    );
+
+    return {
+        score: Math.round(qualityScore * 100),
+        sharpnessRaw: gradMean
+    };
+}
+
 function updateLiveRegions(landmarks, video) {
     if (offscreenCanvas.width !== 800) { offscreenCanvas.width = 800; offscreenCanvas.height = 800; }
     REGIONS.forEach(r => {
@@ -339,6 +452,17 @@ function updateLiveRegions(landmarks, video) {
         if (!liveCanvas) return;
         const liveCtx = liveCanvas.getContext('2d', { willReadFrequently: true });
         if (liveCanvas.width !== 800) { liveCanvas.width = 800; liveCanvas.height = 800; regionBuffers[r.id] = []; }
+        if (!regionLocks[r.id]) regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
+        const lockState = regionLocks[r.id];
+
+        const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
+        if (lockState.locked) {
+            if (indicator) {
+                indicator.textContent = `ULTRA-HD LOCKED (${lockState.quality})`;
+                indicator.style.color = '#55ff55';
+            }
+            return;
+        }
 
         const srcPoints = r.anchors.map(idx => ({ x: landmarks[idx].x * video.videoWidth, y: landmarks[idx].y * video.videoHeight }));
         const m = solveAffine(srcPoints, r.target);
@@ -359,35 +483,46 @@ function updateLiveRegions(landmarks, video) {
 
         const sampleSize = 200;
         const imgData = offscreenCtx.getImageData(300, 300, sampleSize, sampleSize).data;
-        let sharpness = 0;
-        const rowStride = sampleSize * 4;
-        for (let y = 0; y < sampleSize - 1; y++) {
-            for (let x = 0; x < sampleSize - 1; x++) {
-                const i = ((y * sampleSize) + x) * 4;
-                const lum = (0.299 * imgData[i]) + (0.587 * imgData[i + 1]) + (0.114 * imgData[i + 2]);
-                const lumX = (0.299 * imgData[i + 4]) + (0.587 * imgData[i + 5]) + (0.114 * imgData[i + 6]);
-                const lumY = (0.299 * imgData[i + rowStride]) + (0.587 * imgData[i + rowStride + 1]) + (0.114 * imgData[i + rowStride + 2]);
-                sharpness += Math.abs(lum - lumX) + Math.abs(lum - lumY);
-            }
-        }
+        const nowTs = Date.now();
+        const quality = analyzeSampleQuality(r.id, imgData, sampleSize, nowTs);
 
         const qualityMultiplier = r.quality || 1.0; 
 
         const buffer = regionBuffers[r.id];
-        if (buffer.length < MAX_BUFFER_SIZE || (sharpness / qualityMultiplier) > buffer[buffer.length - 1].score) {
-            buffer.push({ score: sharpness / qualityMultiplier, data: offscreenCtx.getImageData(0, 0, 800, 800), ts: Date.now() });
+        const gateBlocked = !captureGateState.ok;
+        if (gateBlocked) {
+            if (indicator) {
+                indicator.textContent = captureGateState.reasons[0] || 'HOLD STEADY';
+                indicator.style.color = '#ffcf66';
+            }
+            return;
+        }
+
+        const effectiveScore = quality.score / qualityMultiplier;
+        if (buffer.length < MAX_BUFFER_SIZE || effectiveScore > buffer[buffer.length - 1].score) {
+            buffer.push({ score: effectiveScore, quality: quality.score, data: offscreenCtx.getImageData(0, 0, 800, 800), ts: nowTs });
             buffer.sort((a, b) => b.score - a.score);
             if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
             
             // ZERO GHOSTING: Always show the single sharpest frame at 100% opacity
             liveCtx.globalAlpha = 1.0;
             liveCtx.drawImage(offscreenCanvas, 0, 0);
+
+            if (quality.score >= (r.lockThreshold || 80) && buffer.length >= 3) {
+                lockState.locked = true;
+                lockState.quality = quality.score;
+                lockState.ts = nowTs;
+            }
         }
 
-        const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
         if (indicator) {
-            indicator.textContent = buffer.length >= MAX_BUFFER_SIZE ? 'ULTRA-HD LOCKED' : `WEAVING TEXTURE: ${buffer.length * 10}%`;
-            indicator.style.color = buffer.length >= MAX_BUFFER_SIZE ? '#55ff55' : '#00d2ff';
+            if (lockState.locked) {
+                indicator.textContent = `ULTRA-HD LOCKED (${lockState.quality})`;
+                indicator.style.color = '#55ff55';
+            } else {
+                indicator.textContent = `QUALITY ${quality.score} | ${Math.min(100, buffer.length * 10)}%`;
+                indicator.style.color = quality.score >= 70 ? '#55ff55' : '#00d2ff';
+            }
         }
     });
 }
@@ -429,15 +564,27 @@ function getForeheadGreen(landmarks, video) {
     return g / (d.length / 4);
 }
 
+function captureCurrentFaceImageBase64() {
+    if (!video.videoWidth || !video.videoHeight) return null;
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.9);
+}
+
 async function completeScan() {
     isAnalyzing = true;
+    const faceImageBase64 = captureCurrentFaceImageBase64();
     scannerView.classList.add('hidden');
     liveRegionRow.classList.add('hidden');
     // Simplified 2-step UX: scan -> analysis/result.
-    await proceedToAnalysis();
+    await proceedToAnalysis(faceImageBase64);
 }
 
-async function proceedToAnalysis() {
+async function proceedToAnalysis(faceImageBase64 = null) {
     regionConfirmationView.classList.add('hidden');
     analysisView.classList.remove('hidden');
     const bpm = calculateBPM(pulseSamples), resp = calculateRespiration(respirationSamples), blinks = Math.round((blinkCount / (SCAN_DURATION / 1000)) * 60);
@@ -453,7 +600,8 @@ async function proceedToAnalysis() {
             body: JSON.stringify({ 
                 regions: { forehead: { gloss_reflectance_score: 0.2, wrinkle_depth_index: 0.1 }, nose: { gloss_reflectance_score: 0.6, pore_diameter_variance: 0.5 }, chin: { erythema_index: 0.3 } },
                 global: { age: 30, gender: "female", environment_type: "urban" },
-                biometrics: { bpm, respiration: resp, blinkRate: blinks } 
+                biometrics: { bpm, respiration: resp, blinkRate: blinks },
+                face_image_base64: faceImageBase64
             })
         });
         clearInterval(deepTimer);
@@ -468,7 +616,7 @@ async function proceedToAnalysis() {
             throw new Error(errorMessage);
         }
         const result = await response.json();
-        setTimeout(() => { analysisView.classList.add('hidden'); showResults(result, { bpm, resp, blinks }); }, 1000);
+        setTimeout(() => { analysisView.classList.add('hidden'); showResults(result, { bpm, resp, blinks }, faceImageBase64); }, 1000);
     } catch (err) {
         clearInterval(deepTimer);
         alert(`Analysis Error: ${err.message}`);
@@ -521,7 +669,7 @@ function detrend(arr, w) {
     return res;
 }
 
-function showResults(data, vitals) {
+function showResults(data, vitals, submittedFaceImageBase64 = null) {
     if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
     resultsSection.classList.remove('hidden');
     resultsGrid.innerHTML = '';
@@ -564,13 +712,31 @@ function showResults(data, vitals) {
     metaCard.style.border = '1px solid rgba(255,255,255,0.1)';
     const demographics = data.demographics || {};
     const summary = data.dermatology_summary || {};
+    const estimatedAge = data.age_estimation?.estimated_age;
     metaCard.innerHTML = `
         <h3 style="margin-bottom: 12px; font-size: 0.9rem; letter-spacing: 1px;">Clinical Summary</h3>
         <p style="margin: 4px 0;">Confidence: <strong>${data.confidence ?? '--'}%</strong></p>
+        <p style="margin: 4px 0;">Estimated Age (HF): <strong>${estimatedAge ?? '--'}</strong></p>
         <p style="margin: 4px 0;">Age/Gender: <strong>${demographics.age ?? '--'} / ${demographics.gender ?? '--'}</strong></p>
         <p style="margin: 4px 0;">Finding: <strong>${summary.primary_finding || 'NA'}</strong></p>
     `;
     resultsGrid.appendChild(metaCard);
+
+    if (submittedFaceImageBase64) {
+        const imageCard = document.createElement('div');
+        imageCard.className = 'result-card';
+        imageCard.style.background = 'rgba(255,255,255,0.04)';
+        imageCard.style.border = '1px solid rgba(255,255,255,0.1)';
+        imageCard.innerHTML = `
+            <h3 style="margin-bottom: 12px; font-size: 0.9rem; letter-spacing: 1px;">Image Sent To HF</h3>
+            <img
+                src="${submittedFaceImageBase64}"
+                alt="Face frame sent to Hugging Face"
+                style="width: 100%; max-height: 260px; object-fit: contain; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15); background: #000;"
+            />
+        `;
+        resultsGrid.appendChild(imageCard);
+    }
 
     Object.entries(data.pillars || {}).forEach(([pillarName, pillar]) => {
         if (!pillar) return;
@@ -603,6 +769,7 @@ function resetScanner() {
     lostFrames = 0;
     lastLandmarks = null;
     eyeClosed = false;
+    captureGateState = { ok: false, reasons: [] };
     pulseSamples = [];
     respirationSamples = [];
     blinkCount = 0;
@@ -622,6 +789,8 @@ function resetScanner() {
     // Clear per-region image buffers and canvases.
     REGIONS.forEach(r => {
         regionBuffers[r.id] = [];
+        regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
+        previousSamples[r.id] = null;
         const liveCanvas = document.getElementById(r.id);
         if (liveCanvas) {
             const ctx = liveCanvas.getContext('2d');

@@ -3,12 +3,19 @@ const { runLayerB } = require("../services/layerB");
 const { runLayerC } = require("../services/layerC");
 const { computeConfidence } = require("../services/confidence");
 const { calibrateLayerB } = require("../services/confidenceCalibration");
+const { estimateAgeFromFaceImage } = require("../services/huggingfaceAge");
 
 async function analyzeFace(req, res) {
   try {
     let input = req.body;
 
     const cleanedInput = handleMissingMetrics(input);
+    const estimatedAge = await estimateAgeFromFaceImage(input?.face_image_base64);
+    if (typeof estimatedAge === "number") {
+      cleanedInput.global = cleanedInput.global || {};
+      cleanedInput.global.age = estimatedAge;
+    }
+
     const layerBOutput = runLayerB(cleanedInput);
     const calibratedLayerB = calibrateLayerB(layerBOutput);
 
@@ -20,7 +27,11 @@ async function analyzeFace(req, res) {
     return res.json({
       success: true,
       ...finalAnalysis,
-      confidence
+      confidence,
+      age_estimation: {
+        source: "huggingface",
+        estimated_age: estimatedAge ?? null
+      }
     });
 
   } catch (error) {
