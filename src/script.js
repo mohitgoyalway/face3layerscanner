@@ -68,15 +68,15 @@ const REGIONS = [
         id: 'live-Left-Cheek', name: 'Left Cheek', 
         indices: [116, 117, 118, 101, 123], 
         pad: 0.25,
-        anchors: [116, 123, 117], 
-        target: [[300, 300], [500, 500], [200, 500]]
+        anchors: [123, 117, 234], // Outer-Eye, Inner-Eye-Nose, Jawline (Wide Triangle)
+        target: [[200, 200], [450, 400], [350, 600]]
     },
     { 
         id: 'live-Right-Cheek', name: 'Right Cheek', 
         indices: [345, 346, 347, 330, 352], 
         pad: 0.25,
-        anchors: [345, 352, 346],
-        target: [[500, 300], [300, 500], [600, 500]]
+        anchors: [352, 346, 454], // Outer-Eye, Inner-Eye-Nose, Jawline (Wide Triangle)
+        target: [[600, 200], [350, 400], [450, 600]]
     },
     { 
         id: 'live-Chin', name: 'Chin', 
@@ -279,9 +279,13 @@ function updateLiveRegions(landmarks, video) {
         let sharpness = 0;
         for (let i = 0; i < imgData.length - 4; i += 4) sharpness += Math.abs(imgData[i] - imgData[i+4]);
 
+        // TIGHTEN GATING: Cheeks are smoother, so they need a stricter "quality bar"
+        const isCheek = r.id.includes('Cheek');
+        const qualityMultiplier = isCheek ? 1.5 : 1.0; 
+
         const buffer = regionBuffers[r.id];
-        if (buffer.length < MAX_BUFFER_SIZE || sharpness > buffer[buffer.length - 1].score) {
-            buffer.push({ score: sharpness, data: offscreenCtx.getImageData(0, 0, 800, 800) });
+        if (buffer.length < MAX_BUFFER_SIZE || (sharpness / qualityMultiplier) > buffer[buffer.length - 1].score) {
+            buffer.push({ score: sharpness / qualityMultiplier, data: offscreenCtx.getImageData(0, 0, 800, 800) });
             buffer.sort((a, b) => b.score - a.score);
             if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
             liveCtx.globalAlpha = 0.15;
