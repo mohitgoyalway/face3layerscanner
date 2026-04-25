@@ -154,6 +154,7 @@ let lastLandmarks = null;
 let captureGateState = { ok: false, reasons: [] };
 let gateOpenSince = 0;              // timestamp when gate last transitioned to open
 let prevGateWasOpen = false;        // tracks previous frame gate state for haptic trigger
+let lightingWarning = null;         // 'dark' | 'bright' | null — set during stabilization
 let goodScanMs = 0;                 // accumulated ms of gate-open time (real scan progress)
 let lastGoodFrameTime = 0;          // wall-clock time of last gate-open frame
 let stabilizationFaceImage = null;  // captured at stabilization (best centered frame)
@@ -449,6 +450,23 @@ function onResults(results) {
                 completeScan();
             }
         } else {
+            // Run lighting check on frames 3–8 of stabilization
+            if (stabilizationFrames >= 3 && stabilizationFrames <= 8) {
+                lightingWarning = checkLighting();
+            }
+
+            // Block scan start while lighting is bad; reset counter so user can fix and retry
+            if (lightingWarning === 'dark') {
+                stabilizationFrames = 0;
+                statusText.textContent = 'CHECK LIGHTING';
+                return;
+            }
+            if (lightingWarning === 'bright') {
+                stabilizationFrames = 0;
+                statusText.textContent = 'CHECK LIGHTING';
+                return;
+            }
+
             stabilizationFrames++;
             statusText.textContent = `STABILIZING... ${Math.round((stabilizationFrames/15)*100)}%`;
             if (stabilizationFrames >= 15) {
@@ -608,6 +626,23 @@ function computeCaptureGate(landmarks, video) {
     };
 }
 
+function checkLighting() {
+    if (offscreenCanvas.width < 100 || offscreenCanvas.height < 100) return null;
+    offscreenCanvas.width = offscreenCanvas.width; // clear
+    offscreenCanvas.width = 100; offscreenCanvas.height = 100;
+    offscreenCtx.drawImage(video, 0, 0, 100, 100);
+    const pixels = offscreenCtx.getImageData(20, 20, 60, 60).data;
+    let sum = 0;
+    const count = pixels.length / 4;
+    for (let i = 0; i < pixels.length; i += 4) {
+        sum += 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+    }
+    const avg = sum / count;
+    if (avg < 40)  return 'dark';
+    if (avg > 220) return 'bright';
+    return null;
+}
+
 function drawInVideoInstruction(ctx, noFace) {
     const w = canvas.width;
     const h = canvas.height;
@@ -615,7 +650,13 @@ function drawInVideoInstruction(ctx, noFace) {
 
     let text, color;
 
-    if (noFace) {
+    if (lightingWarning === 'dark') {
+        text  = 'TOO DARK — MOVE TO BETTER LIGHTING';
+        color = '#ffcf66';
+    } else if (lightingWarning === 'bright') {
+        text  = 'BRIGHT LIGHT BEHIND YOU — TURN AROUND';
+        color = '#ffcf66';
+    } else if (noFace) {
         text = 'POSITION YOUR FACE IN THE OVAL';
         color = '#ffcf66';
     } else if (!captureGateState.ok) {
@@ -1299,6 +1340,7 @@ function resetScanner() {
     captureGateState = { ok: false, reasons: [] };
     gateOpenSince = 0;
     prevGateWasOpen = false;
+    lightingWarning = null;
     goodScanMs = 0;
     lastGoodFrameTime = 0;
     pulseSamples = [];
