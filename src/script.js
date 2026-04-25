@@ -190,21 +190,29 @@ const REGIONS = [
         quality: 1.0,
         lockThreshold: 80
     },
-    { 
-        id: 'live-Left-Cheek', name: 'Left Cheek', 
-        indices: [116, 117, 118, 101, 123], 
+    {
+        id: 'live-Left-Cheek', name: 'Left Cheek',
+        indices: [116, 117, 118, 101, 123],
         pad: 0.25,
         useBboxCrop: true,
+        crop: {
+            minFaceWidthRatio:  0.25,
+            minFaceHeightRatio: 0.18
+        },
         anchors: [123, 117, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[100, 300], [500, 350], [400, 650]], // Proportional Zoom
         quality: 1.5,
         lockThreshold: 82
     },
-    { 
-        id: 'live-Right-Cheek', name: 'Right Cheek', 
-        indices: [345, 346, 347, 330, 352], 
+    {
+        id: 'live-Right-Cheek', name: 'Right Cheek',
+        indices: [345, 346, 347, 330, 352],
         pad: 0.25,
         useBboxCrop: true,
+        crop: {
+            minFaceWidthRatio:  0.25,
+            minFaceHeightRatio: 0.18
+        },
         anchors: [352, 346, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[700, 300], [300, 350], [400, 650]], // Proportional Zoom
         quality: 1.5,
