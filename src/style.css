@@ -289,9 +289,13 @@ header {
 
 #overlay {
   position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   pointer-events: none;
+  /* No width/height — canvas renders at its JS-set intrinsic size,
+     which exactly matches the contain-rendered video dimensions.
+     Centering via transform aligns it with the letterboxed video. */
 }
 
 /* === SCAN STATUS CHIP === */
@@ -784,7 +788,7 @@ header {
   #video {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
 
   /* ── LIVE REGION ROW: horizontal scroll → 3×2 grid ── */
