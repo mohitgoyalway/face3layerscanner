@@ -369,15 +369,7 @@ function onResults(results) {
             LOG.info('Video stream dimensions', { width: video.videoWidth, height: video.videoHeight });
         }
 
-        // DRAW MESH
-        ctx.save();
-        if (window.drawConnectors) {
-            drawConnectors(ctx, landmarks, window.FACEMESH_TESSELATION, {color: 'rgba(255,255,255,0.25)', lineWidth: 0.5});
-            drawConnectors(ctx, landmarks, window.FACEMESH_CONTOURS, {color: '#00d2ff', lineWidth: 1.2});
-        }
-        ctx.restore();
-
-        // Compute gate every frame (used by oval and scan logic)
+        // Compute gate before drawing mesh so mesh color reflects current state
         captureGateState = computeCaptureGate(landmarks, video);
 
         // Haptic: single 80ms buzz the moment gate transitions closed → open (mobile only)
@@ -388,7 +380,28 @@ function onResults(results) {
         }
         prevGateWasOpen = captureGateState.ok;
 
-        drawFaceOval(ctx);
+        // Mesh color follows gate state: red blocked → orange just opened → green locked in
+        let meshColor;
+        if (!captureGateState.ok) {
+            gateOpenSince = 0;
+            meshColor = '#ff4444';
+        } else {
+            if (gateOpenSince === 0) gateOpenSince = Date.now();
+            meshColor = (Date.now() - gateOpenSince) > 2000 ? '#00e676' : '#ffaa00';
+        }
+
+        // DRAW MESH
+        ctx.save();
+        if (window.drawConnectors) {
+            const tesselationAlpha = meshColor === '#ff4444' ? 0.18 : 0.28;
+            const rgb = meshColor === '#ff4444' ? '255,68,68'
+                      : meshColor === '#ffaa00' ? '255,170,0'
+                      : '0,230,118';
+            drawConnectors(ctx, landmarks, window.FACEMESH_TESSELATION, {color: `rgba(${rgb},${tesselationAlpha})`, lineWidth: 0.5});
+            drawConnectors(ctx, landmarks, window.FACEMESH_CONTOURS,    {color: meshColor, lineWidth: 1.2});
+        }
+        ctx.restore();
+
         drawInVideoInstruction(ctx);
 
         // SCAN LOGIC
@@ -501,7 +514,6 @@ function onResults(results) {
         }
     } else {
         lostFrames++;
-        drawFaceOval(ctx, true);
         drawInVideoInstruction(ctx, true);
         if (lostFrames > 10) {
             if (lostFrames === 11) LOG.warn('Face LOST — searching for subject', { scanStarted: scanStartTime > 0 });
@@ -696,9 +708,8 @@ function drawInVideoInstruction(ctx, noFace) {
     const boxW = textW + padX * 2;
     const boxH = fontSize + padY * 2;
     const boxX = w * 0.5 - boxW / 2;
-    // Place label just below the oval bottom edge
-    const ovalBottomY = h * 0.5 + h * (isMobile ? 0.42 : 0.38);
-    const boxY = ovalBottomY + fontSize * 0.6;
+    // Place label near the bottom of the video frame
+    const boxY = h * 0.84;
 
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.beginPath();
@@ -709,39 +720,6 @@ function drawInVideoInstruction(ctx, noFace) {
     ctx.shadowColor = color;
     ctx.shadowBlur = 6;
     ctx.fillText(text, w * 0.5, boxY + boxH / 2);
-    ctx.restore();
-}
-
-function drawFaceOval(ctx, noFace) {
-    const w = canvas.width;
-    const h = canvas.height;
-    if (w === 0 || h === 0) return;
-    const isMobile = window.innerWidth < 768;
-    const cx = w * 0.5;
-    const cy = h * 0.5;
-    const rx = w * (isMobile ? 0.26 : 0.22);
-    const ry = h * (isMobile ? 0.42 : 0.38);
-
-    let strokeColor;
-    if (noFace) {
-        strokeColor = 'rgba(255,255,255,0.25)';
-        gateOpenSince = 0;
-    } else if (!captureGateState.ok) {
-        strokeColor = '#ff4444';
-        gateOpenSince = 0;
-    } else {
-        if (gateOpenSince === 0) gateOpenSince = Date.now();
-        strokeColor = (Date.now() - gateOpenSince) > 2000 ? '#00e676' : '#ffaa00';
-    }
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = isMobile ? 4 : 3;
-    ctx.shadowColor = strokeColor;
-    ctx.shadowBlur = 10;
-    ctx.stroke();
     ctx.restore();
 }
 
