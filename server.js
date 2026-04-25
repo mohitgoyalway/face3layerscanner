@@ -4,8 +4,8 @@ const cors = require("cors");
 const morgan = require("morgan");
 const path = require("path");
 
-// Note: analyze route is still in src/routes
-const analyzeRoute = require("./src/routes/analyze");
+const analyzeRoute  = require("./src/routes/analyze");
+const scanLogRoute  = require("./src/routes/scanLog");
 
 const app = express();
 
@@ -28,6 +28,7 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/analyze-face", analyzeRoute);
+app.use("/scan-log",    scanLogRoute);
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
