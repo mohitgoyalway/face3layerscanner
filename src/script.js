@@ -153,6 +153,7 @@ let lostFrames = 0;
 let lastLandmarks = null;
 let captureGateState = { ok: false, reasons: [] };
 let gateOpenSince = 0;              // timestamp when gate last transitioned to open
+let prevGateWasOpen = false;        // tracks previous frame gate state for haptic trigger
 let goodScanMs = 0;                 // accumulated ms of gate-open time (real scan progress)
 let lastGoodFrameTime = 0;          // wall-clock time of last gate-open frame
 let stabilizationFaceImage = null;  // captured at stabilization (best centered frame)
@@ -376,6 +377,15 @@ function onResults(results) {
 
         // Compute gate every frame (used by oval and scan logic)
         captureGateState = computeCaptureGate(landmarks, video);
+
+        // Haptic: single 80ms buzz the moment gate transitions closed → open (mobile only)
+        if (captureGateState.ok && !prevGateWasOpen) {
+            if ('vibrate' in navigator && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
+                navigator.vibrate(80);
+            }
+        }
+        prevGateWasOpen = captureGateState.ok;
+
         drawFaceOval(ctx);
         drawInVideoInstruction(ctx);
 
@@ -1288,6 +1298,7 @@ function resetScanner() {
     eyeClosed = false;
     captureGateState = { ok: false, reasons: [] };
     gateOpenSince = 0;
+    prevGateWasOpen = false;
     goodScanMs = 0;
     lastGoodFrameTime = 0;
     pulseSamples = [];
