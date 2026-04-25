@@ -152,6 +152,7 @@ let stabilizationFrames = 0;
 let lostFrames = 0;
 let lastLandmarks = null;
 let captureGateState = { ok: false, reasons: [] };
+let gateOpenSince = 0;              // timestamp when gate last transitioned to open
 let stabilizationFaceImage = null;  // captured at stabilization (best centered frame)
 let _pendingFaceImageBase64 = null; // held between completeScan → confirmRegions → proceedToAnalysis
 
@@ -371,12 +372,15 @@ function onResults(results) {
         }
         ctx.restore();
 
+        // Compute gate every frame (used by oval and scan logic)
+        captureGateState = computeCaptureGate(landmarks, video);
+        drawFaceOval(ctx);
+
         // SCAN LOGIC
         if (scanStartTime > 0) {
             statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";
             statusIndicator.classList.add('active');
             liveRegionRow.classList.remove('hidden');
-            captureGateState = computeCaptureGate(landmarks, video);
 
             if (!captureGateState.ok) {
                 LOG.warn('Capture gate BLOCKED — frame skipped', captureGateState.reasons);
@@ -455,6 +459,7 @@ function onResults(results) {
         }
     } else {
         lostFrames++;
+        drawFaceOval(ctx, true);
         if (lostFrames > 10) {
             if (lostFrames === 11) LOG.warn('Face LOST — searching for subject', { scanStarted: scanStartTime > 0 });
             statusText.textContent = "SEARCHING FOR SUBJECT...";
@@ -578,6 +583,39 @@ function computeCaptureGate(landmarks, video) {
         ok: reasons.length === 0,
         reasons
     };
+}
+
+function drawFaceOval(ctx, noFace) {
+    const w = canvas.width;
+    const h = canvas.height;
+    if (w === 0 || h === 0) return;
+    const isMobile = window.innerWidth < 768;
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+    const rx = w * (isMobile ? 0.26 : 0.22);
+    const ry = h * (isMobile ? 0.42 : 0.38);
+
+    let strokeColor;
+    if (noFace) {
+        strokeColor = 'rgba(255,255,255,0.25)';
+        gateOpenSince = 0;
+    } else if (!captureGateState.ok) {
+        strokeColor = '#ff4444';
+        gateOpenSince = 0;
+    } else {
+        if (gateOpenSince === 0) gateOpenSince = Date.now();
+        strokeColor = (Date.now() - gateOpenSince) > 2000 ? '#00e676' : '#ffaa00';
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = isMobile ? 4 : 3;
+    ctx.shadowColor = strokeColor;
+    ctx.shadowBlur = 10;
+    ctx.stroke();
+    ctx.restore();
 }
 
 function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
@@ -1175,6 +1213,7 @@ function resetScanner() {
     lastLandmarks = null;
     eyeClosed = false;
     captureGateState = { ok: false, reasons: [] };
+    gateOpenSince = 0;
     pulseSamples = [];
     respirationSamples = [];
     blinkCount = 0;
