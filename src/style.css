@@ -487,6 +487,21 @@ header {
   50%       { opacity: 0.9; }
 }
 
+.region-ready-count {
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-2);
+  padding: 6px 0 2px;
+  transition: color 0.4s ease;
+}
+.region-ready-count.all-locked {
+  color: #00e676;
+  animation: pulseText 1.2s ease-in-out 3;
+}
+
 .live-biometric-badge {
   position: absolute;
   bottom: 28px;

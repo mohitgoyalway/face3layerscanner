@@ -121,6 +121,7 @@ const timerText = document.getElementById('timerText');
 const progressBarFill = document.getElementById('progressBarFill');
 const analysisOverlay = document.getElementById('analysisOverlay');
 const liveRegionRow = document.getElementById('liveRegionRow');
+const regionReadyCount = document.getElementById('regionReadyCount');
 
 const regionConfirmationView = document.getElementById('regionConfirmationView');
 const regionImagesGrid = document.getElementById('regionImagesGrid');
@@ -395,6 +396,7 @@ function onResults(results) {
             statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";
             statusIndicator.classList.add('active');
             liveRegionRow.classList.remove('hidden');
+            if (regionReadyCount) regionReadyCount.classList.remove('hidden');
 
             if (!captureGateState.ok) {
                 LOG.warn('Capture gate BLOCKED — frame skipped', captureGateState.reasons);
@@ -904,6 +906,27 @@ function updateLiveRegions(landmarks, video) {
             }
         }
     });
+
+    // Update regions-ready counter
+    if (regionReadyCount) {
+        const locked = REGIONS.filter(r => regionLocks[r.id]?.locked).length;
+        const total  = REGIONS.length;
+        regionReadyCount.classList.remove('hidden', 'all-locked');
+        if (locked === 0) {
+            regionReadyCount.textContent = 'Positioning…';
+            regionReadyCount.style.color = '';
+        } else if (locked < total - 1) {
+            regionReadyCount.textContent = `${locked} of ${total} regions locked`;
+            regionReadyCount.style.color = '#F0A030';
+        } else if (locked === total - 1) {
+            regionReadyCount.textContent = `${locked} of ${total} regions locked — almost done`;
+            regionReadyCount.style.color = '#a0e080';
+        } else {
+            regionReadyCount.textContent = `ALL ${total} REGIONS LOCKED ✓`;
+            regionReadyCount.style.color = '#00e676';
+            regionReadyCount.classList.add('all-locked');
+        }
+    }
 }
 
 function calculateMedianImageData(buffer) {
@@ -1341,6 +1364,7 @@ function resetScanner() {
     LOG_ENTRIES.length = 0; // clear log for the next scan session
     resultsSection.classList.add('hidden'); analysisView.classList.add('hidden'); regionConfirmationView.classList.add('hidden');
     setupView.classList.remove('hidden'); analysisOverlay.classList.add('hidden'); liveRegionRow.classList.add('hidden');
+    if (regionReadyCount) { regionReadyCount.classList.add('hidden'); regionReadyCount.classList.remove('all-locked'); regionReadyCount.textContent = 'Positioning…'; regionReadyCount.style.color = ''; }
     scanStartTime = 0;
     stabilizationFrames = 0;
     lostFrames = 0;
