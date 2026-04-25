@@ -775,6 +775,9 @@ header {
     max-width: 320px;
   }
 
+  /* Status chip is redundant on mobile — canvas instruction replaces it */
+  .scan-status-overlay { display: none; }
+
   /* ── SCANNER VIEW: only this view gets full-height lockdown ── */
   #scannerView {
     padding: 0.5rem;

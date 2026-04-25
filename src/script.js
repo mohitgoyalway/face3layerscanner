@@ -671,7 +671,7 @@ function drawInVideoInstruction(ctx, noFace) {
         text  = 'BRIGHT LIGHT BEHIND YOU — TURN AROUND';
         color = '#ffcf66';
     } else if (noFace) {
-        text = 'POSITION YOUR FACE IN THE OVAL';
+        text = 'POSITION YOUR FACE IN THE FRAME';
         color = '#ffcf66';
     } else if (!captureGateState.ok) {
         const reason = captureGateState.reasons[0] || '';
@@ -708,8 +708,8 @@ function drawInVideoInstruction(ctx, noFace) {
     const boxW = textW + padX * 2;
     const boxH = fontSize + padY * 2;
     const boxX = w * 0.5 - boxW / 2;
-    // Place label near the bottom of the video frame
-    const boxY = h * 0.84;
+    // Mobile: top of frame (status chip hidden); desktop: above the progress bar
+    const boxY = isMobile ? h * 0.07 : h * 0.78;
 
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.beginPath();
