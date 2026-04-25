@@ -377,6 +377,7 @@ function onResults(results) {
         // Compute gate every frame (used by oval and scan logic)
         captureGateState = computeCaptureGate(landmarks, video);
         drawFaceOval(ctx);
+        drawInVideoInstruction(ctx);
 
         // SCAN LOGIC
         if (scanStartTime > 0) {
@@ -471,6 +472,7 @@ function onResults(results) {
     } else {
         lostFrames++;
         drawFaceOval(ctx, true);
+        drawInVideoInstruction(ctx, true);
         if (lostFrames > 10) {
             if (lostFrames === 11) LOG.warn('Face LOST — searching for subject', { scanStarted: scanStartTime > 0 });
             statusText.textContent = "SEARCHING FOR SUBJECT...";
@@ -594,6 +596,67 @@ function computeCaptureGate(landmarks, video) {
         ok: reasons.length === 0,
         reasons
     };
+}
+
+function drawInVideoInstruction(ctx, noFace) {
+    const w = canvas.width;
+    const h = canvas.height;
+    if (w === 0 || h === 0) return;
+
+    let text, color;
+
+    if (noFace) {
+        text = 'POSITION YOUR FACE IN THE OVAL';
+        color = '#ffcf66';
+    } else if (!captureGateState.ok) {
+        const reason = captureGateState.reasons[0] || '';
+        if (reason.includes('closer'))        { text = 'MOVE CLOSER';               color = '#ffffff'; }
+        else if (reason.includes('back'))     { text = 'MOVE BACK SLIGHTLY';        color = '#ffffff'; }
+        else if (reason.includes('straight')) { text = 'FACE THE CAMERA DIRECTLY';  color = '#ffffff'; }
+        else if (reason.includes('level'))    { text = 'KEEP HEAD LEVEL';           color = '#ffffff'; }
+        else if (reason.includes('vertical')) { text = 'CENTER YOUR FACE';          color = '#ffffff'; }
+        else                                  { text = 'ADJUST YOUR POSITION';      color = '#ffffff'; }
+    } else {
+        const heldMs = gateOpenSince > 0 ? Date.now() - gateOpenSince : 0;
+        if (heldMs < 1500) {
+            text  = 'PERFECT — HOLD STILL';
+            color = '#00e676';
+        } else if (scanStartTime > 0) {
+            text  = 'SCANNING…';
+            color = '#00d2ff';
+        } else {
+            text  = 'HOLD STILL';
+            color = '#00e676';
+        }
+    }
+
+    const isMobile = window.innerWidth < 768;
+    const fontSize = isMobile ? Math.round(h * 0.048) : Math.round(h * 0.038);
+    ctx.save();
+    ctx.font = `700 ${fontSize}px "Plus Jakarta Sans", Montserrat, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const textW = ctx.measureText(text).width;
+    const padX = fontSize * 0.6;
+    const padY = fontSize * 0.4;
+    const boxW = textW + padX * 2;
+    const boxH = fontSize + padY * 2;
+    const boxX = w * 0.5 - boxW / 2;
+    // Place label just below the oval bottom edge
+    const ovalBottomY = h * 0.5 + h * (isMobile ? 0.42 : 0.38);
+    const boxY = ovalBottomY + fontSize * 0.6;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxW, boxH, fontSize * 0.3);
+    ctx.fill();
+
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    ctx.fillText(text, w * 0.5, boxY + boxH / 2);
+    ctx.restore();
 }
 
 function drawFaceOval(ctx, noFace) {
