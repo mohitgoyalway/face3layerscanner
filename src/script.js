@@ -153,6 +153,8 @@ let lostFrames = 0;
 let lastLandmarks = null;
 let captureGateState = { ok: false, reasons: [] };
 let gateOpenSince = 0;              // timestamp when gate last transitioned to open
+let goodScanMs = 0;                 // accumulated ms of gate-open time (real scan progress)
+let lastGoodFrameTime = 0;          // wall-clock time of last gate-open frame
 let stabilizationFaceImage = null;  // captured at stabilization (best centered frame)
 let _pendingFaceImageBase64 = null; // held between completeScan → confirmRegions → proceedToAnalysis
 
@@ -384,12 +386,19 @@ function onResults(results) {
 
             if (!captureGateState.ok) {
                 LOG.warn('Capture gate BLOCKED — frame skipped', captureGateState.reasons);
+                lastGoodFrameTime = 0;
             }
 
-            const elapsed = Date.now() - scanStartTime;
-            if (elapsed < SCAN_DURATION) {
-                pulseSamples.push({ t: elapsed, g: getForeheadGreen(landmarks, video) });
-                respirationSamples.push({ t: elapsed, y: landmarks[1].y });
+            // Accumulate good scan time only while gate is open
+            if (captureGateState.ok) {
+                const now = Date.now();
+                if (lastGoodFrameTime > 0) goodScanMs += now - lastGoodFrameTime;
+                lastGoodFrameTime = now;
+            }
+
+            if (goodScanMs < SCAN_DURATION) {
+                pulseSamples.push({ t: goodScanMs, g: getForeheadGreen(landmarks, video) });
+                respirationSamples.push({ t: goodScanMs, y: landmarks[1].y });
                 detectBlink(landmarks);
                 updateLiveRegions(landmarks, video);
 
@@ -414,7 +423,7 @@ function onResults(results) {
                             frames:  buf.length,
                         };
                     });
-                    LOG.group(`SCAN PROGRESS @ ${(elapsed/1000).toFixed(1)}s / ${SCAN_DURATION/1000}s`, () => {
+                    LOG.group(`SCAN PROGRESS @ ${(goodScanMs/1000).toFixed(1)}s good / ${SCAN_DURATION/1000}s`, () => {
                         LOG.info('Pulse samples collected', pulseSamples.length);
                         LOG.info('Respiration samples collected', respirationSamples.length);
                         LOG.info('Blinks detected so far', blinkCount);
@@ -423,8 +432,8 @@ function onResults(results) {
                     });
                 }
 
-                timerText.textContent = `${((SCAN_DURATION - elapsed) / 1000).toFixed(1)}s`;
-                progressBarFill.style.width = `${(elapsed / SCAN_DURATION) * 100}%`;
+                timerText.textContent = `${((SCAN_DURATION - goodScanMs) / 1000).toFixed(1)}s`;
+                progressBarFill.style.width = `${(goodScanMs / SCAN_DURATION) * 100}%`;
             } else {
                 completeScan();
             }
@@ -446,6 +455,8 @@ function onResults(results) {
                 }
 
                 scanStartTime = Date.now();
+                goodScanMs = 0;
+                lastGoodFrameTime = 0;
                 analysisOverlay.classList.remove('hidden');
                 REGIONS.forEach(r => {
                     regionBuffers[r.id] = [];
@@ -1214,6 +1225,8 @@ function resetScanner() {
     eyeClosed = false;
     captureGateState = { ok: false, reasons: [] };
     gateOpenSince = 0;
+    goodScanMs = 0;
+    lastGoodFrameTime = 0;
     pulseSamples = [];
     respirationSamples = [];
     blinkCount = 0;
