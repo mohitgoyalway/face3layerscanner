@@ -821,8 +821,10 @@ function updateLiveRegions(landmarks, video) {
         if (!regionLocks[r.id]) regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
         const lockState = regionLocks[r.id];
 
-        const indicator = liveCanvas.parentElement.querySelector('.refining-indicator');
+        const tile = liveCanvas.parentElement;
+        const indicator = tile.querySelector('.refining-indicator');
         if (lockState.locked) {
+            tile.style.borderColor = 'rgba(0,230,118,0.8)';
             if (indicator) {
                 indicator.textContent = `ULTRA-HD LOCKED (${lockState.quality})`;
                 indicator.style.color = '#55ff55';
@@ -857,6 +859,7 @@ function updateLiveRegions(landmarks, video) {
         const buffer = regionBuffers[r.id];
         const gateBlocked = !captureGateState.ok;
         if (gateBlocked) {
+            tile.style.borderColor = 'rgba(255,255,255,0.12)';
             if (indicator) {
                 indicator.textContent = captureGateState.reasons[0] || 'HOLD STEADY';
                 indicator.style.color = '#ffcf66';
@@ -883,6 +886,12 @@ function updateLiveRegions(landmarks, video) {
                 const lockedCount = REGIONS.filter(reg => regionLocks[reg.id]?.locked).length;
                 LOG.info(`Locked regions: ${lockedCount} / ${REGIONS.length}`);
             }
+        }
+
+        if (lockState.locked) {
+            tile.style.borderColor = 'rgba(0,230,118,0.8)';
+        } else if (buffer.length > 0) {
+            tile.style.borderColor = 'rgba(236,97,14,0.7)';
         }
 
         if (indicator) {
@@ -1369,7 +1378,9 @@ function resetScanner() {
             const ctx = liveCanvas.getContext('2d');
             ctx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
         }
-        const indicator = liveCanvas?.parentElement?.querySelector('.refining-indicator');
+        const tile = liveCanvas?.parentElement;
+        if (tile) tile.style.borderColor = '';
+        const indicator = tile?.querySelector('.refining-indicator');
         if (indicator) {
             indicator.textContent = 'RECONSTRUCTING...';
             indicator.style.color = '#00d2ff';
