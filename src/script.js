@@ -145,7 +145,8 @@ const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true
 
 // SCAN STATE
 let isAnalyzing = false;
-const SCAN_DURATION = 15000;
+const SCAN_DURATION  = 15000;
+const SCAN_EXTENSION = 10000; // extra ms allowed if <4 regions reach good quality by 15s
 let pulseSamples = [];
 let respirationSamples = [];
 let blinkCount = 0;
@@ -465,7 +466,19 @@ function onResults(results) {
                 timerText.textContent = `${((SCAN_DURATION - goodScanMs) / 1000).toFixed(1)}s`;
                 progressBarFill.style.width = `${(goodScanMs / SCAN_DURATION) * 100}%`;
             } else {
-                completeScan();
+                // Require ≥4 regions at good quality before completing; allow up to SCAN_EXTENSION extra ms
+                const goodRegionCount = REGIONS.filter(r => (bestRegionCategory[r.id] || 0) >= 2).length;
+                if (goodRegionCount >= 4 || goodScanMs >= SCAN_DURATION + SCAN_EXTENSION) {
+                    completeScan();
+                } else {
+                    // Extension phase: keep collecting data while region hints guide the user
+                    pulseSamples.push({ t: goodScanMs, g: getForeheadGreen(landmarks, video) });
+                    respirationSamples.push({ t: goodScanMs, y: landmarks[1].y });
+                    detectBlink(landmarks);
+                    updateLiveRegions(landmarks, video);
+                    timerText.textContent = '0.0s';
+                    progressBarFill.style.width = '100%';
+                }
             }
         } else {
             // Run lighting check on frames 3–8 of stabilization
@@ -678,6 +691,31 @@ function checkLighting() {
     return null;
 }
 
+// Region-specific hints shown during active scan when a region is stuck below good quality
+const REGION_HINTS = {
+    'live-Forehead':    'FOREHEAD NEEDS MORE — HOLD PERFECTLY STILL',
+    'live-Nose':        'NOSE NEEDS MORE — MOVE A LITTLE CLOSER',
+    'live-Left-Cheek':  'LEFT CHEEK NEEDS MORE — FACE CAMERA DIRECTLY',
+    'live-Right-Cheek': 'RIGHT CHEEK NEEDS MORE — FACE CAMERA DIRECTLY',
+    'live-Chin':        'CHIN NEEDS MORE — LIFT CHIN SLIGHTLY',
+    'live-Jawline':     'JAWLINE NEEDS MORE — HOLD PERFECTLY STILL',
+};
+
+function getRegionHint() {
+    if (scanStartTime === 0 || goodScanMs < 4000) return null;
+
+    // Regions that haven't reached good quality and aren't locked yet
+    const stuck = REGIONS.filter(r => {
+        if (regionLocks[r.id]?.locked) return false;
+        return (bestRegionCategory[r.id] || 0) < 2;
+    });
+    if (stuck.length === 0) return null;
+
+    // Rotate through stuck regions every 3 seconds of good scan time
+    const idx = Math.floor(goodScanMs / 3000) % stuck.length;
+    return REGION_HINTS[stuck[idx].id] || null;
+}
+
 function detectFaceCovering(landmarks, video) {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return null;
@@ -776,8 +814,14 @@ function updateInstructionOverlay(noFace) {
             text  = 'PERFECT — HOLD STILL';
             color = '#00e676';
         } else if (scanStartTime > 0) {
-            text  = 'SCANNING…';
-            color = '#00d2ff';
+            const hint = getRegionHint();
+            if (hint) {
+                text  = hint;
+                color = '#00d2ff';
+            } else {
+                text  = 'SCANNING…';
+                color = '#00d2ff';
+            }
         } else {
             text  = 'HOLD STILL';
             color = '#00e676';
