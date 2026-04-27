@@ -158,6 +158,7 @@ let captureGateState = { ok: false, reasons: [] };
 let gateOpenSince = 0;              // timestamp when gate last transitioned to open
 let prevGateWasOpen = false;        // tracks previous frame gate state for haptic trigger
 let lightingWarning = null;         // 'dark' | 'bright' | null — set during stabilization
+let coveringDetected = null;        // 'shades' | 'mask' | null — face accessory occlusion
 const bestRegionCategory = {};      // regionId → 0..3, only ever increases during a scan
 let goodScanMs = 0;                 // accumulated ms of gate-open time (real scan progress)
 let lastGoodFrameTime = 0;          // wall-clock time of last gate-open frame
@@ -374,6 +375,7 @@ function onResults(results) {
 
         // Compute gate before drawing mesh so mesh color reflects current state
         captureGateState = computeCaptureGate(landmarks, video);
+        coveringDetected  = detectFaceCovering(landmarks, video);
 
         // Haptic: single 80ms buzz the moment gate transitions closed → open (mobile only)
         if (captureGateState.ok && !prevGateWasOpen) {
@@ -530,6 +532,7 @@ function onResults(results) {
         }
     } else {
         lostFrames++;
+        coveringDetected = null;
         updateInstructionOverlay(true);
         if (lostFrames > 10) {
             if (lostFrames === 11) LOG.warn('Face LOST — searching for subject', { scanStarted: scanStartTime > 0 });
@@ -629,31 +632,33 @@ function clamp01(v) {
 }
 
 function computeCaptureGate(landmarks, video) {
-    const faceWidth = Math.abs((landmarks[454]?.x ?? 0.8) - (landmarks[234]?.x ?? 0.2));
+    const faceWidth  = Math.abs((landmarks[454]?.x ?? 0.8) - (landmarks[234]?.x ?? 0.2));
     const faceHeight = Math.abs((landmarks[152]?.y ?? 0.85) - (landmarks[10]?.y ?? 0.15));
-    const nose = landmarks[1];
-    const left = landmarks[234];
+    const nose  = landmarks[1];
+    const left  = landmarks[234];
     const right = landmarks[454];
-    const top = landmarks[10];
-    const chin = landmarks[152];
+    const top   = landmarks[10];
+    const chin  = landmarks[152];
 
-    const leftDist = Math.abs((nose?.x ?? 0.5) - (left?.x ?? 0.2));
-    const rightDist = Math.abs((right?.x ?? 0.8) - (nose?.x ?? 0.5));
-    const yawAsymmetry = Math.abs(leftDist - rightDist) / Math.max(1e-6, leftDist + rightDist);
-    const noseVertical = ((nose?.y ?? 0.5) - (top?.y ?? 0.15)) / Math.max(1e-6, (chin?.y ?? 0.85) - (top?.y ?? 0.15));
+    const leftDist  = Math.abs((nose?.x ?? 0.5) - (left?.x  ?? 0.2));
+    const rightDist = Math.abs((right?.x ?? 0.8) - (nose?.x  ?? 0.5));
+    const yawAsymmetry   = Math.abs(leftDist - rightDist) / Math.max(1e-6, leftDist + rightDist);
+    const noseVertical   = ((nose?.y ?? 0.5) - (top?.y ?? 0.15)) / Math.max(1e-6, (chin?.y ?? 0.85) - (top?.y ?? 0.15));
     const pitchDeviation = Math.abs(noseVertical - 0.52);
 
+    // Vertical centering: where the face mid-point sits in the frame (0 = top, 1 = bottom)
+    const faceCenterY = ((top?.y ?? 0.5) + (chin?.y ?? 0.5)) / 2;
+
     const reasons = [];
-    if (faceWidth < 0.30) reasons.push("Move closer");
-    if (faceWidth > 0.72) reasons.push("Move slightly back");
-    if (faceHeight < 0.30) reasons.push("Center face vertically");
-    if (yawAsymmetry > 0.26) reasons.push("Face camera straight");
+    if (faceWidth < 0.30)      reasons.push("Move closer");
+    if (faceWidth > 0.72)      reasons.push("Move slightly back");
+    if (faceHeight < 0.25)     reasons.push("Show your full face");   // truly cropped — lower threshold than before
+    if (faceCenterY < 0.28)    reasons.push("Lower the camera");      // face sitting too high
+    if (faceCenterY > 0.72)    reasons.push("Raise the camera");      // face sitting too low
+    if (yawAsymmetry > 0.26)   reasons.push("Face camera straight");
     if (pitchDeviation > 0.24) reasons.push("Keep head level");
 
-    return {
-        ok: reasons.length === 0,
-        reasons
-    };
+    return { ok: reasons.length === 0, reasons };
 }
 
 function checkLighting() {
@@ -673,6 +678,68 @@ function checkLighting() {
     return null;
 }
 
+function detectFaceCovering(landmarks, video) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return null;
+
+    const px = (idx) => ({ x: landmarks[idx].x * vw, y: landmarks[idx].y * vh });
+
+    // Sample a zone from video into a small patch; return { mean, std } of luminance
+    function sampleZone(x, y, w, h) {
+        if (w < 4 || h < 4) return null;
+        const cW = Math.min(w, 40), cH = Math.min(h, 40);
+        offscreenCanvas.width = cW;
+        offscreenCanvas.height = cH;
+        offscreenCtx.drawImage(video, x, y, w, h, 0, 0, cW, cH);
+        const d = offscreenCtx.getImageData(0, 0, cW, cH).data;
+        let lumSum = 0, lumSqSum = 0, n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+            const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            lumSum += lum; lumSqSum += lum * lum; n++;
+        }
+        const mean = lumSum / Math.max(1, n);
+        return { mean, std: Math.sqrt(Math.max(0, lumSqSum / Math.max(1, n) - mean * mean)) };
+    }
+
+    // Forehead reference zone
+    const top = px(10), browL = px(107), browR = px(336), tempL = px(234), tempR = px(454);
+    const fh = sampleZone(
+        Math.max(0, Math.round(tempL.x + (tempR.x - tempL.x) * 0.15)),
+        Math.max(0, Math.round(top.y)),
+        Math.max(4, Math.round((tempR.x - tempL.x) * 0.70)),
+        Math.max(4, Math.round((browL.y - top.y) * 0.80))
+    );
+    if (!fh || fh.mean < 25) return null; // too dark — lighting warning handles this
+
+    // Eye zone (between brow arches and lower eyelids, full eye width)
+    const browArchL = px(70), browArchR = px(300);
+    const eyeOutL = px(33), eyeOutR = px(263), eyeLowL = px(145), eyeLowR = px(374);
+    const eyeY = Math.max(0, Math.round(Math.min(browArchL.y, browArchR.y)));
+    const eye = sampleZone(
+        Math.max(0, Math.round(eyeOutL.x)),
+        eyeY,
+        Math.max(4, Math.round(eyeOutR.x - eyeOutL.x)),
+        Math.max(4, Math.round(Math.max(eyeLowL.y, eyeLowR.y) - eyeY))
+    );
+
+    // Lower face zone (nose tip → chin, between inner jaw landmarks)
+    const noseTip = px(1), chin = px(152), jawL = px(57), jawR = px(287);
+    const lf = sampleZone(
+        Math.max(0, Math.round(jawL.x)),
+        Math.max(0, Math.round(noseTip.y)),
+        Math.max(4, Math.round(jawR.x - jawL.x)),
+        Math.max(4, Math.round(chin.y - noseTip.y))
+    );
+
+    // Shades / dark sunglasses: eye zone ≥45% darker than forehead
+    if (eye && fh.mean > 55 && eye.mean < fh.mean * 0.52) return 'shades';
+
+    // Mask: lower face is very uniform (fabric) AND clearly different tone from forehead
+    if (lf && lf.std < 14 && Math.abs(lf.mean - fh.mean) > 28 && fh.mean > 55) return 'mask';
+
+    return null;
+}
+
 function updateInstructionOverlay(noFace) {
     if (!instructionOverlay) return;
 
@@ -687,14 +754,22 @@ function updateInstructionOverlay(noFace) {
     } else if (noFace) {
         text  = 'POSITION YOUR FACE IN THE FRAME';
         color = '#ffcf66';
+    } else if (coveringDetected === 'shades') {
+        text  = 'REMOVE SUNGLASSES — FULL FACE MUST BE VISIBLE';
+        color = '#ffcf66';
+    } else if (coveringDetected === 'mask') {
+        text  = 'REMOVE MASK — FULL FACE MUST BE VISIBLE';
+        color = '#ffcf66';
     } else if (!captureGateState.ok) {
         const reason = captureGateState.reasons[0] || '';
-        if (reason.includes('closer'))        { text = 'MOVE CLOSER';              color = '#ffffff'; }
-        else if (reason.includes('back'))     { text = 'MOVE BACK SLIGHTLY';       color = '#ffffff'; }
-        else if (reason.includes('straight')) { text = 'FACE THE CAMERA DIRECTLY'; color = '#ffffff'; }
-        else if (reason.includes('level'))    { text = 'KEEP HEAD LEVEL';          color = '#ffffff'; }
-        else if (reason.includes('vertical')) { text = 'CENTER YOUR FACE';         color = '#ffffff'; }
-        else                                  { text = 'ADJUST YOUR POSITION';     color = '#ffffff'; }
+        if      (reason.includes('closer'))     { text = 'MOVE CLOSER';               color = '#ffffff'; }
+        else if (reason.includes('back'))       { text = 'MOVE BACK SLIGHTLY';        color = '#ffffff'; }
+        else if (reason.includes('full face'))  { text = 'SHOW YOUR FULL FACE';       color = '#ffffff'; }
+        else if (reason.includes('Lower'))      { text = 'LOWER THE CAMERA SLIGHTLY'; color = '#ffffff'; }
+        else if (reason.includes('Raise'))      { text = 'RAISE THE CAMERA SLIGHTLY'; color = '#ffffff'; }
+        else if (reason.includes('straight'))   { text = 'FACE THE CAMERA DIRECTLY';  color = '#ffffff'; }
+        else if (reason.includes('level'))      { text = 'KEEP HEAD LEVEL';           color = '#ffffff'; }
+        else                                    { text = 'ADJUST YOUR POSITION';      color = '#ffffff'; }
     } else {
         const heldMs = gateOpenSince > 0 ? Date.now() - gateOpenSince : 0;
         if (heldMs < 1500) {
@@ -1434,6 +1509,7 @@ function resetScanner() {
     gateOpenSince = 0;
     prevGateWasOpen = false;
     lightingWarning = null;
+    coveringDetected = null;
     goodScanMs = 0;
     lastGoodFrameTime = 0;
     pulseSamples = [];
