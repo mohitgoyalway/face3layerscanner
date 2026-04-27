@@ -122,6 +122,7 @@ const progressBarFill = document.getElementById('progressBarFill');
 const analysisOverlay = document.getElementById('analysisOverlay');
 const liveRegionRow = document.getElementById('liveRegionRow');
 const regionReadyCount = document.getElementById('regionReadyCount');
+const mobileScanProgress = document.getElementById('mobileScanProgress');
 
 const regionConfirmationView = document.getElementById('regionConfirmationView');
 const regionImagesGrid = document.getElementById('regionImagesGrid');
@@ -156,6 +157,7 @@ let captureGateState = { ok: false, reasons: [] };
 let gateOpenSince = 0;              // timestamp when gate last transitioned to open
 let prevGateWasOpen = false;        // tracks previous frame gate state for haptic trigger
 let lightingWarning = null;         // 'dark' | 'bright' | null — set during stabilization
+const bestRegionCategory = {};      // regionId → 0..3, only ever increases during a scan
 let goodScanMs = 0;                 // accumulated ms of gate-open time (real scan progress)
 let lastGoodFrameTime = 0;          // wall-clock time of last gate-open frame
 let stabilizationFaceImage = null;  // captured at stabilization (best centered frame)
@@ -408,8 +410,6 @@ function onResults(results) {
         if (scanStartTime > 0) {
             statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";
             statusIndicator.classList.add('active');
-            liveRegionRow.classList.remove('hidden');
-            if (regionReadyCount) regionReadyCount.classList.remove('hidden');
 
             if (!captureGateState.ok) {
                 LOG.warn('Capture gate BLOCKED — frame skipped', captureGateState.reasons);
@@ -506,7 +506,22 @@ function onResults(results) {
                     regionBuffers[r.id] = [];
                     regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
                     previousSamples[r.id] = null;
+                    bestRegionCategory[r.id] = 0;
                 });
+
+                // Mobile: show compact progress list instead of live video tiles
+                if (window.innerWidth < 768) {
+                    if (mobileScanProgress) {
+                        mobileScanProgress.querySelectorAll('.msp-item').forEach(el => {
+                            el.setAttribute('data-state', '0');
+                            el.querySelector('.msp-state').textContent = 'NOT DETECTED';
+                        });
+                        mobileScanProgress.classList.remove('hidden');
+                    }
+                } else {
+                    liveRegionRow.classList.remove('hidden');
+                    if (regionReadyCount) regionReadyCount.classList.remove('hidden');
+                }
                 LOG.info('Region buffers initialised for', REGIONS.map(r => r.name));
             } else {
                 LOG.dim(`Stabilizing frame ${stabilizationFrames}/15`);
@@ -885,7 +900,7 @@ function updateLiveRegions(landmarks, video) {
         }
     });
 
-    // Update regions-ready counter
+    // Update regions-ready counter (desktop only — hidden on mobile via CSS)
     if (regionReadyCount) {
         const locked = REGIONS.filter(r => regionLocks[r.id]?.locked).length;
         const total  = REGIONS.length;
@@ -904,6 +919,32 @@ function updateLiveRegions(landmarks, video) {
             regionReadyCount.style.color = '#00e676';
             regionReadyCount.classList.add('all-locked');
         }
+    }
+
+    // Update mobile progress list (only meaningful when visible)
+    if (mobileScanProgress && !mobileScanProgress.classList.contains('hidden')) {
+        const CAT_LABELS = ['NOT DETECTED', 'LOW QUALITY', 'GOOD QUALITY', 'LOCKED ✓'];
+        REGIONS.forEach(r => {
+            const lock   = regionLocks[r.id] || {};
+            const buf    = regionBuffers[r.id] || [];
+            const best   = buf.length > 0 ? buf[0].quality : 0;
+
+            let cat = 0;
+            if (lock.locked)       cat = 3;
+            else if (best >= 55)   cat = 2;
+            else if (best > 0)     cat = 1;
+
+            // Category can only go up within a scan
+            if (cat > (bestRegionCategory[r.id] || 0)) bestRegionCategory[r.id] = cat;
+            const displayCat = bestRegionCategory[r.id] || 0;
+
+            const item = mobileScanProgress.querySelector(`[data-region="${r.id}"]`);
+            if (!item) return;
+            if (parseInt(item.getAttribute('data-state')) !== displayCat) {
+                item.setAttribute('data-state', displayCat);
+                item.querySelector('.msp-state').textContent = CAT_LABELS[displayCat];
+            }
+        });
     }
 }
 
@@ -981,6 +1022,7 @@ function completeScan() {
 
     scannerView.classList.add('hidden');
     liveRegionRow.classList.add('hidden');
+    if (mobileScanProgress) mobileScanProgress.classList.add('hidden');
 
     // Show region confirmation view before proceeding to analysis
     populateRegionConfirmation();
@@ -1343,6 +1385,14 @@ function resetScanner() {
     resultsSection.classList.add('hidden'); analysisView.classList.add('hidden'); regionConfirmationView.classList.add('hidden');
     setupView.classList.remove('hidden'); analysisOverlay.classList.add('hidden'); liveRegionRow.classList.add('hidden');
     if (regionReadyCount) { regionReadyCount.classList.add('hidden'); regionReadyCount.classList.remove('all-locked'); regionReadyCount.textContent = 'Positioning…'; regionReadyCount.style.color = ''; }
+    if (mobileScanProgress) {
+        mobileScanProgress.classList.add('hidden');
+        mobileScanProgress.querySelectorAll('.msp-item').forEach(el => {
+            el.setAttribute('data-state', '0');
+            el.querySelector('.msp-state').textContent = 'NOT DETECTED';
+        });
+    }
+    REGIONS.forEach(r => { bestRegionCategory[r.id] = 0; });
     scanStartTime = 0;
     stabilizationFrames = 0;
     lostFrames = 0;
