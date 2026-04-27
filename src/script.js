@@ -711,9 +711,6 @@ function updateInstructionOverlay(noFace) {
 
     instructionOverlay.textContent = text;
     instructionOverlay.style.color = color;
-    instructionOverlay.style.borderColor = color === '#ffffff'
-        ? 'rgba(255,255,255,0.2)'
-        : color + '44';
     instructionOverlay.classList.remove('hidden');
 }
 
