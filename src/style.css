@@ -298,6 +298,32 @@ header {
      Centering via transform aligns it with the letterboxed video. */
 }
 
+/* === IN-VIDEO INSTRUCTION OVERLAY (DOM — never canvas-clipped) === */
+.instruction-overlay {
+  position: absolute;
+  bottom: 72px;          /* desktop: just above the progress bar */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 8px 20px;
+  border-radius: var(--r-pill);
+  background: rgba(8,8,10,0.82);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.15);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: normal;
+  text-align: center;
+  max-width: 86%;
+  width: max-content;
+  pointer-events: none;
+  line-height: 1.4;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.5);
+}
+
 /* === SCAN STATUS CHIP === */
 .scan-status-overlay {
   position: absolute;
@@ -844,11 +870,19 @@ header {
     max-width: 320px;
   }
 
-  /* Status chip is redundant on mobile — canvas instruction replaces it */
+  /* Status chip is redundant on mobile — instruction overlay replaces it */
   .scan-status-overlay { display: none; }
 
   /* Region ready count is redundant on mobile — per-region list replaces it */
   .region-ready-count { display: none; }
+
+  /* Instruction overlay: move to top of frame on mobile (clear of progress bar) */
+  .instruction-overlay {
+    bottom: auto;
+    top: 10px;
+    font-size: 0.85rem;
+    padding: 9px 22px;
+  }
 
   /* ── SCANNER VIEW: only this view gets full-height lockdown ── */
   #scannerView {

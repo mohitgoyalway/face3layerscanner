@@ -123,6 +123,7 @@ const analysisOverlay = document.getElementById('analysisOverlay');
 const liveRegionRow = document.getElementById('liveRegionRow');
 const regionReadyCount = document.getElementById('regionReadyCount');
 const mobileScanProgress = document.getElementById('mobileScanProgress');
+const instructionOverlay = document.getElementById('instructionOverlay');
 
 const regionConfirmationView = document.getElementById('regionConfirmationView');
 const regionImagesGrid = document.getElementById('regionImagesGrid');
@@ -404,7 +405,7 @@ function onResults(results) {
         }
         ctx.restore();
 
-        drawInVideoInstruction(ctx);
+        updateInstructionOverlay();
 
         // SCAN LOGIC
         if (scanStartTime > 0) {
@@ -529,7 +530,7 @@ function onResults(results) {
         }
     } else {
         lostFrames++;
-        drawInVideoInstruction(ctx, true);
+        updateInstructionOverlay(true);
         if (lostFrames > 10) {
             if (lostFrames === 11) LOG.warn('Face LOST — searching for subject', { scanStarted: scanStartTime > 0 });
             statusText.textContent = "SEARCHING FOR SUBJECT...";
@@ -672,10 +673,8 @@ function checkLighting() {
     return null;
 }
 
-function drawInVideoInstruction(ctx, noFace) {
-    const w = canvas.width;
-    const h = canvas.height;
-    if (w === 0 || h === 0) return;
+function updateInstructionOverlay(noFace) {
+    if (!instructionOverlay) return;
 
     let text, color;
 
@@ -686,16 +685,16 @@ function drawInVideoInstruction(ctx, noFace) {
         text  = 'BRIGHT LIGHT BEHIND YOU — TURN AROUND';
         color = '#ffcf66';
     } else if (noFace) {
-        text = 'POSITION YOUR FACE IN THE FRAME';
+        text  = 'POSITION YOUR FACE IN THE FRAME';
         color = '#ffcf66';
     } else if (!captureGateState.ok) {
         const reason = captureGateState.reasons[0] || '';
-        if (reason.includes('closer'))        { text = 'MOVE CLOSER';               color = '#ffffff'; }
-        else if (reason.includes('back'))     { text = 'MOVE BACK SLIGHTLY';        color = '#ffffff'; }
-        else if (reason.includes('straight')) { text = 'FACE THE CAMERA DIRECTLY';  color = '#ffffff'; }
-        else if (reason.includes('level'))    { text = 'KEEP HEAD LEVEL';           color = '#ffffff'; }
-        else if (reason.includes('vertical')) { text = 'CENTER YOUR FACE';          color = '#ffffff'; }
-        else                                  { text = 'ADJUST YOUR POSITION';      color = '#ffffff'; }
+        if (reason.includes('closer'))        { text = 'MOVE CLOSER';              color = '#ffffff'; }
+        else if (reason.includes('back'))     { text = 'MOVE BACK SLIGHTLY';       color = '#ffffff'; }
+        else if (reason.includes('straight')) { text = 'FACE THE CAMERA DIRECTLY'; color = '#ffffff'; }
+        else if (reason.includes('level'))    { text = 'KEEP HEAD LEVEL';          color = '#ffffff'; }
+        else if (reason.includes('vertical')) { text = 'CENTER YOUR FACE';         color = '#ffffff'; }
+        else                                  { text = 'ADJUST YOUR POSITION';     color = '#ffffff'; }
     } else {
         const heldMs = gateOpenSince > 0 ? Date.now() - gateOpenSince : 0;
         if (heldMs < 1500) {
@@ -710,32 +709,12 @@ function drawInVideoInstruction(ctx, noFace) {
         }
     }
 
-    const isMobile = window.innerWidth < 768;
-    const fontSize = isMobile ? Math.round(h * 0.048) : Math.round(h * 0.038);
-    ctx.save();
-    ctx.font = `700 ${fontSize}px "Plus Jakarta Sans", Montserrat, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const textW = ctx.measureText(text).width;
-    const padX = fontSize * 0.6;
-    const padY = fontSize * 0.4;
-    const boxW = textW + padX * 2;
-    const boxH = fontSize + padY * 2;
-    const boxX = w * 0.5 - boxW / 2;
-    // Mobile: top of frame (status chip hidden); desktop: above the progress bar
-    const boxY = isMobile ? h * 0.07 : h * 0.78;
-
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.beginPath();
-    ctx.roundRect(boxX, boxY, boxW, boxH, fontSize * 0.3);
-    ctx.fill();
-
-    ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 6;
-    ctx.fillText(text, w * 0.5, boxY + boxH / 2);
-    ctx.restore();
+    instructionOverlay.textContent = text;
+    instructionOverlay.style.color = color;
+    instructionOverlay.style.borderColor = color === '#ffffff'
+        ? 'rgba(255,255,255,0.2)'
+        : color + '44';
+    instructionOverlay.classList.remove('hidden');
 }
 
 function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
@@ -1023,6 +1002,7 @@ function completeScan() {
     scannerView.classList.add('hidden');
     liveRegionRow.classList.add('hidden');
     if (mobileScanProgress) mobileScanProgress.classList.add('hidden');
+    if (instructionOverlay) instructionOverlay.classList.add('hidden');
 
     // Show region confirmation view before proceeding to analysis
     populateRegionConfirmation();
@@ -1385,6 +1365,7 @@ function resetScanner() {
     resultsSection.classList.add('hidden'); analysisView.classList.add('hidden'); regionConfirmationView.classList.add('hidden');
     setupView.classList.remove('hidden'); analysisOverlay.classList.add('hidden'); liveRegionRow.classList.add('hidden');
     if (regionReadyCount) { regionReadyCount.classList.add('hidden'); regionReadyCount.classList.remove('all-locked'); regionReadyCount.textContent = 'Positioning…'; regionReadyCount.style.color = ''; }
+    if (instructionOverlay) instructionOverlay.classList.add('hidden');
     if (mobileScanProgress) {
         mobileScanProgress.classList.add('hidden');
         mobileScanProgress.querySelectorAll('.msp-item').forEach(el => {

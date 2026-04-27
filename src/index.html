@@ -46,7 +46,10 @@
                     <div class="video-frame">
                         <video id="video" autoplay muted playsinline></video>
                         <canvas id="overlay"></canvas>
-                        
+
+                        <!-- Instruction label — DOM element so it's never clipped or scaled by canvas -->
+                        <div id="instructionOverlay" class="instruction-overlay hidden"></div>
+
                         <div id="scanStatus" class="scan-status-overlay">
                             <div class="status-chip">
                                 <span class="status-indicator"></span>
