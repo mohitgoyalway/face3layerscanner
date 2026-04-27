@@ -188,16 +188,16 @@ const REGIONS = [
         anchors: [10, 127, 356], 
         target: [[400, 200], [50, 600], [750, 600]], // Macro Zoom
         quality: 1.0,
-        lockThreshold: 78
+        lockThreshold: 82
     },
-    { 
-        id: 'live-Nose', name: 'Nose', 
-        indices: [168, 6, 197, 2, 102, 331], 
+    {
+        id: 'live-Nose', name: 'Nose',
+        indices: [168, 6, 197, 2, 102, 331],
         pad: 0.2,
-        anchors: [168, 102, 331], 
+        anchors: [168, 102, 331],
         target: [[400, 200], [200, 650], [600, 650]], // Macro Zoom
         quality: 1.0,
-        lockThreshold: 80
+        lockThreshold: 82
     },
     {
         id: 'live-Left-Cheek', name: 'Left Cheek',
@@ -242,7 +242,7 @@ const REGIONS = [
         anchors: [164, 57, 287],
         target: [[400, 200], [100, 600], [700, 600]], // Macro Zoom
         quality: 1.0,
-        lockThreshold: 80
+        lockThreshold: 82
     },
     {
         id: 'live-Jawline', name: 'Jawline',
@@ -260,7 +260,7 @@ const REGIONS = [
         anchors: [172, 397, 152], // left-jaw, right-jaw, chin-tip
         target: [[80, 280], [720, 280], [400, 680]],
         quality: 1.0,
-        lockThreshold: 75          // slightly more lenient — wide flat region
+        lockThreshold: 78
     }
 ];
 
@@ -644,7 +644,7 @@ function computeCaptureGate(landmarks, video) {
     const pitchDeviation = Math.abs(noseVertical - 0.52);
 
     const reasons = [];
-    if (faceWidth < 0.24) reasons.push("Move closer");
+    if (faceWidth < 0.30) reasons.push("Move closer");
     if (faceWidth > 0.72) reasons.push("Move slightly back");
     if (faceHeight < 0.30) reasons.push("Center face vertically");
     if (yawAsymmetry > 0.26) reasons.push("Face camera straight");
@@ -714,33 +714,69 @@ function updateInstructionOverlay(noFace) {
     instructionOverlay.classList.remove('hidden');
 }
 
+// Per-region scoring weights: [sharpness, glare, exposure, occlusion, stability, contrast]
+const REGION_WEIGHTS = {
+    'live-Forehead':    [0.46, 0.28, 0.10, 0.09, 0.04, 0.03],
+    'live-Nose':        [0.46, 0.28, 0.10, 0.09, 0.04, 0.03],
+    'live-Left-Cheek':  [0.48, 0.15, 0.15, 0.10, 0.05, 0.07],
+    'live-Right-Cheek': [0.48, 0.15, 0.15, 0.10, 0.05, 0.07],
+    'live-Chin':        [0.48, 0.15, 0.10, 0.18, 0.06, 0.03],
+    'live-Jawline':     [0.48, 0.15, 0.10, 0.22, 0.07, 0.03],
+};
+const WEIGHTS_DEFAULT = [0.50, 0.20, 0.10, 0.10, 0.05, 0.05];
+
 function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
     const data = imgData;
-    const pixelCount = sampleSize * sampleSize;
     const rowStride = sampleSize * 4;
 
     let lumSum = 0;
     let lumSqSum = 0;
     let gradSum = 0;
-    let brightCount = 0;
-    let darkCount = 0;
+    let clipLowCount = 0;   // lum 0-5
+    let clipHighCount = 0;  // lum 250-255
+    let darkCount = 0;      // lum < 28
+    let glareCount = 0;     // HSV specular: V>0.90 && S<0.15
+    let rSum = 0, gSum = 0, bSum = 0;
     let motionDiffSum = 0;
 
     const prev = previousSamples[regionId];
     const hasPrev = prev && prev.length === data.length;
 
+    // 4×4 grid for uniformity: accumulate lum per cell
+    const GRID = 4;
+    const cellSize = Math.floor(sampleSize / GRID);
+    const cellLumSum = new Float32Array(GRID * GRID);
+    const cellCounts = new Int32Array(GRID * GRID);
+
     for (let y = 0; y < sampleSize - 1; y++) {
         for (let x = 0; x < sampleSize - 1; x++) {
             const i = ((y * sampleSize) + x) * 4;
-            const lum = (0.299 * data[i]) + (0.587 * data[i + 1]) + (0.114 * data[i + 2]);
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            const lum = (0.299 * r) + (0.587 * g) + (0.114 * b);
             const lumX = (0.299 * data[i + 4]) + (0.587 * data[i + 5]) + (0.114 * data[i + 6]);
             const lumY = (0.299 * data[i + rowStride]) + (0.587 * data[i + rowStride + 1]) + (0.114 * data[i + rowStride + 2]);
 
             lumSum += lum;
             lumSqSum += (lum * lum);
             gradSum += Math.abs(lum - lumX) + Math.abs(lum - lumY);
-            if (lum > 245) brightCount++;
-            if (lum < 28) darkCount++;
+            rSum += r; gSum += g; bSum += b;
+
+            if (lum <= 5)   clipLowCount++;
+            if (lum >= 250) clipHighCount++;
+            if (lum < 28)   darkCount++;
+
+            // HSV-based specular glare: compute V and S from RGB
+            const maxC = Math.max(r, g, b);
+            const minC = Math.min(r, g, b);
+            const V = maxC / 255;
+            const S = maxC > 0 ? (maxC - minC) / maxC : 0;
+            if (V > 0.90 && S < 0.15) glareCount++;
+
+            // 4×4 grid cell accumulation
+            const cx = Math.min(Math.floor(x / cellSize), GRID - 1);
+            const cy = Math.min(Math.floor(y / cellSize), GRID - 1);
+            cellLumSum[cy * GRID + cx] += lum;
+            cellCounts[cy * GRID + cx]++;
 
             if (hasPrev) {
                 const prevLum = (0.299 * prev[i]) + (0.587 * prev[i + 1]) + (0.114 * prev[i + 2]);
@@ -749,36 +785,54 @@ function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
         }
     }
 
-    // Cache this sample for motion estimate in the next frame.
     previousSamples[regionId] = new Uint8ClampedArray(data);
 
     const validPixels = (sampleSize - 1) * (sampleSize - 1);
     const meanLum = lumSum / Math.max(1, validPixels);
     const variance = Math.max(0, (lumSqSum / Math.max(1, validPixels)) - (meanLum * meanLum));
     const contrastStd = Math.sqrt(variance);
-    const gradMean = gradSum / Math.max(1, (validPixels * 2));
-    const glareFrac = brightCount / Math.max(1, validPixels);
+    const gradMean = gradSum / Math.max(1, validPixels * 2);
+    const glareFrac = glareCount / Math.max(1, validPixels);
     const darkFrac = darkCount / Math.max(1, validPixels);
     const motionMean = hasPrev ? (motionDiffSum / Math.max(1, validPixels)) : 0;
 
+    // Exposure: clipping penalty + 4×4 uniformity penalty
+    const clipFrac = (clipLowCount + clipHighCount) / Math.max(1, validPixels);
+    const clipPenalty = clamp01(clipFrac / 0.08);
+    const cellMeans = cellLumSum.map((s, idx) => s / Math.max(1, cellCounts[idx]));
+    const cellMeanAvg = cellMeans.reduce((a, b) => a + b, 0) / cellMeans.length;
+    const cellVariance = cellMeans.reduce((s, v) => s + (v - cellMeanAvg) ** 2, 0) / cellMeans.length;
+    const uniformityPenalty = clamp01(Math.sqrt(cellVariance) / 60);
+    const exposureScore = clamp01(1 - (clipPenalty * 0.6 + uniformityPenalty * 0.4));
+
     const sharpnessScore = clamp01(gradMean / 26);
     const contrastScore = clamp01(contrastStd / 42);
-    const exposureScore = clamp01(1 - (Math.abs(meanLum - 132) / 132));
-    const glareScore = clamp01(1 - (glareFrac / 0.09));
+    const glareScore = clamp01(1 - (glareFrac / 0.07));
     const occlusionScore = clamp01(1 - (darkFrac / 0.35));
     const stabilityScore = clamp01(1 - (motionMean / 22));
-    const qualityScore = (
-        (sharpnessScore * 0.35) +
-        (contrastScore * 0.15) +
-        (exposureScore * 0.15) +
-        (glareScore * 0.10) +
-        (occlusionScore * 0.10) +
-        (stabilityScore * 0.15)
-    );
+
+    const W = REGION_WEIGHTS[regionId] || WEIGHTS_DEFAULT;
+    const qualityScore =
+        sharpnessScore  * W[0] +
+        glareScore      * W[1] +
+        exposureScore   * W[2] +
+        occlusionScore  * W[3] +
+        stabilityScore  * W[4] +
+        contrastScore   * W[5];
+
+    // White-balance sanity (informational — returned for future use)
+    const meanR = rSum / Math.max(1, validPixels);
+    const meanG = gSum / Math.max(1, validPixels);
+    const meanB = bSum / Math.max(1, validPixels);
+    let wbWarning = null;
+    if (meanG / Math.max(1, meanR) > 2.0)  wbWarning = 'fluorescent';
+    else if (meanB / Math.max(1, meanG) > 1.8) wbWarning = 'cold-led';
+    else if (meanR / Math.max(1, meanB) > 2.5)  wbWarning = 'warm-incandescent';
 
     return {
         score: Math.round(qualityScore * 100),
-        sharpnessRaw: gradMean
+        sharpnessRaw: gradMean,
+        wbWarning
     };
 }
 
