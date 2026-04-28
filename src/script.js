@@ -1460,6 +1460,7 @@ function completeScan() {
 
     // Show region confirmation view before proceeding to analysis
     populateRegionConfirmation();
+    document.body.classList.add('region-confirm-active');
     regionConfirmationView.classList.remove('hidden');
     LOG.ok('Region confirmation view shown — awaiting user confirmation');
 }
@@ -1468,20 +1469,34 @@ function populateRegionConfirmation() {
     regionImagesGrid.innerHTML = '';
     REGIONS.forEach(r => {
         const buf  = regionBuffers[r.id] || [];
-        const lock = regionLocks[r.id] || {};
 
         const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;';
+        wrapper.className = `confirm-region-card confirm-${r.id.replace('live-', '').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
         const label = document.createElement('div');
+        label.className = 'confirm-region-name';
         label.textContent = r.name.toUpperCase();
-        label.style.cssText = 'font-size:0.7rem;letter-spacing:2px;color:#aaa;font-family:Montserrat,sans-serif;';
+
+        const selector = document.createElement('label');
+        selector.className = 'confirm-region-selector';
+        selector.setAttribute('aria-label', `Include ${r.name} in confirmed regions`);
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = true;
+        checkbox.dataset.region = r.id;
+        checkbox.addEventListener('change', () => {
+            wrapper.classList.toggle('is-excluded', !checkbox.checked);
+        });
+        const selectorMark = document.createElement('span');
+        selectorMark.setAttribute('aria-hidden', 'true');
+        selector.appendChild(checkbox);
+        selector.appendChild(selectorMark);
+
+        const imageWrap = document.createElement('div');
+        imageWrap.className = 'confirm-region-image-wrap';
 
         const cnv = document.createElement('canvas');
-        cnv.style.cssText = 'width:100%;height:auto;display:block;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:#0d0d1a;';
-
-        const badge = document.createElement('div');
-        badge.style.cssText = 'font-size:0.65rem;letter-spacing:1px;font-family:Montserrat,sans-serif;';
+        cnv.className = 'confirm-region-canvas';
 
         if (buf.length > 0 && buf[0].data) {
             // Render at native resolution — ImageData already carries .width and .height
@@ -1489,8 +1504,6 @@ function populateRegionConfirmation() {
             cnv.width  = imgData.width;
             cnv.height = imgData.height;
             cnv.getContext('2d').putImageData(imgData, 0, 0);
-            badge.textContent  = lock.locked ? `LOCKED ✓  Q:${lock.quality}` : `BEST FRAME  Q:${Math.round(buf[0].quality ?? 0)}`;
-            badge.style.color  = lock.locked ? '#00d4aa' : '#ff9933';
         } else {
             cnv.width  = 200;
             cnv.height = 150;
@@ -1501,13 +1514,12 @@ function populateRegionConfirmation() {
             ctx.font = 'bold 13px Montserrat,sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('NO DATA', cnv.width / 2, cnv.height / 2);
-            badge.textContent = 'NOT CAPTURED';
-            badge.style.color = '#ff4c4c';
         }
 
+        imageWrap.appendChild(cnv);
+        imageWrap.appendChild(selector);
         wrapper.appendChild(label);
-        wrapper.appendChild(cnv);
-        wrapper.appendChild(badge);
+        wrapper.appendChild(imageWrap);
         regionImagesGrid.appendChild(wrapper);
     });
 }
@@ -1518,6 +1530,7 @@ async function proceedToAnalysis() {
     // faceImageBase64 was captured at stabilization and stored
     const faceImageBase64 = _pendingFaceImageBase64;
 
+    document.body.classList.remove('region-confirm-active');
     regionConfirmationView.classList.add('hidden');
     analysisView.classList.remove('hidden');
 
@@ -1818,6 +1831,7 @@ function resetScanner() {
     LOG_ENTRIES.length = 0; // clear log for the next scan session
     resultsSection.classList.add('hidden'); analysisView.classList.add('hidden'); regionConfirmationView.classList.add('hidden');
     setupView.classList.remove('hidden'); analysisOverlay.classList.add('hidden'); liveRegionRow.classList.add('hidden');
+    document.body.classList.remove('region-confirm-active');
     if (regionReadyCount) { regionReadyCount.classList.add('hidden'); regionReadyCount.classList.remove('all-locked'); regionReadyCount.textContent = 'Building region checklist'; regionReadyCount.style.color = ''; }
     if (instructionOverlay) instructionOverlay.classList.add('hidden');
     if (mobileScanProgress) {
