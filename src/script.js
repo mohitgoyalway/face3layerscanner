@@ -159,7 +159,11 @@ let captureGateState = { ok: false, reasons: [] };
 let gateOpenSince = 0;              // timestamp when gate last transitioned to open
 let prevGateWasOpen = false;        // tracks previous frame gate state for haptic trigger
 let lightingWarning = null;         // 'dark' | 'bright' | null — set during stabilization
+let lightingColourWarning = null;   // 'fluorescent' | 'cold-led' | null — harsh light colour
+let shineAdvisory = false;          // true when T-zone glare is consistently high pre-scan
+let shineFrameCount = 0;            // how many stabilisation frames showed high shine
 let coveringDetected = null;        // 'shades' | 'mask' | null — face accessory occlusion
+let skinBaseline = null;            // { r, g, b } — forehead skin tone baseline for this person
 const bestRegionCategory = {};      // regionId → 0..3, only ever increases during a scan
 let goodScanMs = 0;                 // accumulated ms of gate-open time (real scan progress)
 let lastGoodFrameTime = 0;          // wall-clock time of last gate-open frame
@@ -190,7 +194,7 @@ const REGIONS = [
         anchors: [10, 127, 356], 
         target: [[400, 200], [50, 600], [750, 600]], // Macro Zoom
         quality: 1.0,
-        lockThreshold: 82
+        lockThreshold: 76
     },
     {
         id: 'live-Nose', name: 'Nose',
@@ -199,7 +203,7 @@ const REGIONS = [
         anchors: [168, 102, 331],
         target: [[400, 200], [200, 650], [600, 650]], // Macro Zoom
         quality: 1.0,
-        lockThreshold: 82
+        lockThreshold: 76
     },
     {
         id: 'live-Left-Cheek', name: 'Left Cheek',
@@ -213,7 +217,7 @@ const REGIONS = [
         anchors: [123, 117, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[100, 300], [500, 350], [400, 650]], // Proportional Zoom
         quality: 1.5,
-        lockThreshold: 82
+        lockThreshold: 74
     },
     {
         id: 'live-Right-Cheek', name: 'Right Cheek',
@@ -227,7 +231,7 @@ const REGIONS = [
         anchors: [352, 346, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[700, 300], [300, 350], [400, 650]], // Proportional Zoom
         quality: 1.5,
-        lockThreshold: 82
+        lockThreshold: 74
     },
     {
         id: 'live-Chin', name: 'Chin',
@@ -244,7 +248,7 @@ const REGIONS = [
         anchors: [164, 57, 287],
         target: [[400, 200], [100, 600], [700, 600]], // Macro Zoom
         quality: 1.0,
-        lockThreshold: 82
+        lockThreshold: 76
     },
     {
         id: 'live-Jawline', name: 'Jawline',
@@ -262,7 +266,7 @@ const REGIONS = [
         anchors: [172, 397, 152], // left-jaw, right-jaw, chin-tip
         target: [[80, 280], [720, 280], [400, 680]],
         quality: 1.0,
-        lockThreshold: 78
+        lockThreshold: 72
     }
 ];
 
@@ -498,6 +502,13 @@ function onResults(results) {
                 return;
             }
 
+            // Frames 5-12: build skin tone baseline + shine/colour advisory
+            if (stabilizationFrames >= 5 && stabilizationFrames <= 12) {
+                computeSkinBaseline(landmarks, video);
+                if (checkShineLevel(landmarks, video) > 0.12) shineFrameCount++;
+                if (shineFrameCount >= 3) shineAdvisory = true;
+            }
+
             stabilizationFrames++;
             statusText.textContent = `STABILIZING... ${Math.round((stabilizationFrames/15)*100)}%`;
             if (stabilizationFrames >= 15) {
@@ -518,6 +529,7 @@ function onResults(results) {
                 goodScanMs = 0;
                 lastGoodFrameTime = 0;
                 analysisOverlay.classList.remove('hidden');
+                document.body.classList.add('scan-active');
                 REGIONS.forEach(r => {
                     regionBuffers[r.id] = [];
                     regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
@@ -695,8 +707,8 @@ function checkLighting() {
 const REGION_HINTS = {
     'live-Forehead':    'FOREHEAD NEEDS MORE — HOLD PERFECTLY STILL',
     'live-Nose':        'NOSE NEEDS MORE — MOVE A LITTLE CLOSER',
-    'live-Left-Cheek':  'LEFT CHEEK NEEDS MORE — FACE CAMERA DIRECTLY',
-    'live-Right-Cheek': 'RIGHT CHEEK NEEDS MORE — FACE CAMERA DIRECTLY',
+    'live-Left-Cheek':  'LEFT CHEEK NEEDS MORE — ENSURE EVEN LIGHTING ON CHEEK',
+    'live-Right-Cheek': 'RIGHT CHEEK NEEDS MORE — ENSURE EVEN LIGHTING ON CHEEK',
     'live-Chin':        'CHIN NEEDS MORE — LIFT CHIN SLIGHTLY',
     'live-Jawline':     'JAWLINE NEEDS MORE — HOLD PERFECTLY STILL',
 };
@@ -714,6 +726,58 @@ function getRegionHint() {
     // Rotate through stuck regions every 3 seconds of good scan time
     const idx = Math.floor(goodScanMs / 3000) % stuck.length;
     return REGION_HINTS[stuck[idx].id] || null;
+}
+
+function computeSkinBaseline(landmarks, video) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    const top = landmarks[10], browL = landmarks[107];
+    const tempL = landmarks[234], tempR = landmarks[454];
+    const x  = Math.max(0, Math.round((tempL.x + (tempR.x - tempL.x) * 0.15) * vw));
+    const y  = Math.max(0, Math.round(top.y * vh));
+    const w  = Math.max(4, Math.round((tempR.x - tempL.x) * 0.70 * vw));
+    const h  = Math.max(4, Math.round((browL.y - top.y) * 0.80 * vh));
+    const cW = Math.min(w, 40), cH = Math.min(h, 40);
+    offscreenCanvas.width = cW; offscreenCanvas.height = cH;
+    offscreenCtx.drawImage(video, x, y, w, h, 0, 0, cW, cH);
+    const d = offscreenCtx.getImageData(0, 0, cW, cH).data;
+    let rS = 0, gS = 0, bS = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) { rS += d[i]; gS += d[i + 1]; bS += d[i + 2]; n++; }
+    if (n < 1) return;
+    if (!skinBaseline) {
+        skinBaseline = { r: rS / n, g: gS / n, b: bS / n };
+    } else {
+        skinBaseline.r = skinBaseline.r * 0.7 + (rS / n) * 0.3;
+        skinBaseline.g = skinBaseline.g * 0.7 + (gS / n) * 0.3;
+        skinBaseline.b = skinBaseline.b * 0.7 + (bS / n) * 0.3;
+    }
+    // Derive lighting colour warning from baseline
+    if (skinBaseline.g / Math.max(1, skinBaseline.r) > 1.8)     lightingColourWarning = 'fluorescent';
+    else if (skinBaseline.b / Math.max(1, skinBaseline.g) > 1.6) lightingColourWarning = 'cold-led';
+    else                                                           lightingColourWarning = null;
+}
+
+function checkShineLevel(landmarks, video) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return 0;
+    const top = landmarks[10], browL = landmarks[107];
+    const tempL = landmarks[234], tempR = landmarks[454];
+    const x  = Math.max(0, Math.round((tempL.x + (tempR.x - tempL.x) * 0.15) * vw));
+    const y  = Math.max(0, Math.round(top.y * vh));
+    const w  = Math.max(4, Math.round((tempR.x - tempL.x) * 0.70 * vw));
+    const h  = Math.max(4, Math.round((browL.y - top.y) * 0.80 * vh));
+    const cW = Math.min(w, 30), cH = Math.min(h, 30);
+    offscreenCanvas.width = cW; offscreenCanvas.height = cH;
+    offscreenCtx.drawImage(video, x, y, w, h, 0, 0, cW, cH);
+    const d = offscreenCtx.getImageData(0, 0, cW, cH).data;
+    let glareCount = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+        const maxC = Math.max(d[i], d[i + 1], d[i + 2]);
+        const minC = Math.min(d[i], d[i + 1], d[i + 2]);
+        if (maxC / 255 > 0.90 && (maxC > 0 ? (maxC - minC) / maxC : 0) < 0.15) glareCount++;
+        n++;
+    }
+    return n > 0 ? glareCount / n : 0;
 }
 
 function detectFaceCovering(landmarks, video) {
@@ -789,6 +853,9 @@ function updateInstructionOverlay(noFace) {
     } else if (lightingWarning === 'bright') {
         text  = 'BRIGHT LIGHT BEHIND YOU — TURN AROUND';
         color = '#ffcf66';
+    } else if (lightingColourWarning && scanStartTime === 0) {
+        text  = 'HARSH LIGHTING — MOVE TO NATURAL OR WARM LIGHT';
+        color = '#ffcf66';
     } else if (noFace) {
         text  = 'POSITION YOUR FACE IN THE FRAME';
         color = '#ffcf66';
@@ -797,6 +864,9 @@ function updateInstructionOverlay(noFace) {
         color = '#ffcf66';
     } else if (coveringDetected === 'mask') {
         text  = 'REMOVE MASK — FULL FACE MUST BE VISIBLE';
+        color = '#ffcf66';
+    } else if (shineAdvisory && scanStartTime === 0) {
+        text  = 'SKIN LOOKS VERY SHINY — BLOT FACE FOR BEST RESULTS';
         color = '#ffcf66';
     } else if (!captureGateState.ok) {
         const reason = captureGateState.reasons[0] || '';
@@ -833,35 +903,47 @@ function updateInstructionOverlay(noFace) {
     instructionOverlay.classList.remove('hidden');
 }
 
-// Per-region scoring weights: [sharpness, glare, exposure, occlusion, stability, contrast]
+// Per-region scoring weights: [sharpness, glare, exposure, occlusion, stability, colorFidelity]
 const REGION_WEIGHTS = {
-    'live-Forehead':    [0.46, 0.28, 0.10, 0.09, 0.04, 0.03],
-    'live-Nose':        [0.46, 0.28, 0.10, 0.09, 0.04, 0.03],
-    'live-Left-Cheek':  [0.48, 0.15, 0.15, 0.10, 0.05, 0.07],
-    'live-Right-Cheek': [0.48, 0.15, 0.15, 0.10, 0.05, 0.07],
-    'live-Chin':        [0.48, 0.15, 0.10, 0.18, 0.06, 0.03],
-    'live-Jawline':     [0.48, 0.15, 0.10, 0.22, 0.07, 0.03],
+    'live-Forehead':    [0.44, 0.26, 0.08, 0.06, 0.04, 0.12],
+    'live-Nose':        [0.44, 0.28, 0.08, 0.04, 0.04, 0.12],
+    'live-Left-Cheek':  [0.35, 0.18, 0.12, 0.08, 0.05, 0.22],
+    'live-Right-Cheek': [0.35, 0.18, 0.12, 0.08, 0.05, 0.22],
+    'live-Chin':        [0.38, 0.16, 0.10, 0.14, 0.06, 0.16],
+    'live-Jawline':     [0.35, 0.14, 0.10, 0.20, 0.07, 0.14],
 };
-const WEIGHTS_DEFAULT = [0.50, 0.20, 0.10, 0.10, 0.05, 0.05];
+const WEIGHTS_DEFAULT = [0.40, 0.20, 0.10, 0.10, 0.05, 0.15];
+
+// T-zone needs stricter sharpness (pore-level detail) and less motion tolerance
+const SHARPNESS_NORM = {
+    'live-Forehead': 20, 'live-Nose': 20,
+    'live-Left-Cheek': 26, 'live-Right-Cheek': 26,
+    'live-Chin': 26, 'live-Jawline': 26,
+};
+const STABILITY_NORM = {
+    'live-Forehead': 16, 'live-Nose': 16,
+    'live-Left-Cheek': 22, 'live-Right-Cheek': 22,
+    'live-Chin': 22, 'live-Jawline': 22,
+};
 
 function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
     const data = imgData;
     const rowStride = sampleSize * 4;
 
     let lumSum = 0;
-    let lumSqSum = 0;
     let gradSum = 0;
-    let clipLowCount = 0;   // lum 0-5
-    let clipHighCount = 0;  // lum 250-255
-    let darkCount = 0;      // lum < 28
+    let clipLowCount = 0;   // lum 0-5 (crushed black)
+    let clipHighCount = 0;  // lum 250-255 (blown highlight)
+    let darkCount = 0;      // lum < 28 (occlusion / shadow)
     let glareCount = 0;     // HSV specular: V>0.90 && S<0.15
     let rSum = 0, gSum = 0, bSum = 0;
+    let rSqSum = 0;          // for red channel variance (color fidelity)
+    let rHighCount = 0;      // red channel saturation >= 248 (blows redness signal)
     let motionDiffSum = 0;
 
     const prev = previousSamples[regionId];
     const hasPrev = prev && prev.length === data.length;
 
-    // 4×4 grid for uniformity: accumulate lum per cell
     const GRID = 4;
     const cellSize = Math.floor(sampleSize / GRID);
     const cellLumSum = new Float32Array(GRID * GRID);
@@ -876,22 +958,21 @@ function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
             const lumY = (0.299 * data[i + rowStride]) + (0.587 * data[i + rowStride + 1]) + (0.114 * data[i + rowStride + 2]);
 
             lumSum += lum;
-            lumSqSum += (lum * lum);
             gradSum += Math.abs(lum - lumX) + Math.abs(lum - lumY);
             rSum += r; gSum += g; bSum += b;
+            rSqSum += r * r;
 
             if (lum <= 5)   clipLowCount++;
             if (lum >= 250) clipHighCount++;
             if (lum < 28)   darkCount++;
+            if (r >= 248)   rHighCount++;
 
-            // HSV-based specular glare: compute V and S from RGB
             const maxC = Math.max(r, g, b);
             const minC = Math.min(r, g, b);
             const V = maxC / 255;
             const S = maxC > 0 ? (maxC - minC) / maxC : 0;
             if (V > 0.90 && S < 0.15) glareCount++;
 
-            // 4×4 grid cell accumulation
             const cx = Math.min(Math.floor(x / cellSize), GRID - 1);
             const cy = Math.min(Math.floor(y / cellSize), GRID - 1);
             cellLumSum[cy * GRID + cx] += lum;
@@ -907,45 +988,67 @@ function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
     previousSamples[regionId] = new Uint8ClampedArray(data);
 
     const validPixels = (sampleSize - 1) * (sampleSize - 1);
-    const meanLum = lumSum / Math.max(1, validPixels);
-    const variance = Math.max(0, (lumSqSum / Math.max(1, validPixels)) - (meanLum * meanLum));
-    const contrastStd = Math.sqrt(variance);
-    const gradMean = gradSum / Math.max(1, validPixels * 2);
+    const gradMean  = gradSum  / Math.max(1, validPixels * 2);
     const glareFrac = glareCount / Math.max(1, validPixels);
-    const darkFrac = darkCount / Math.max(1, validPixels);
+    const darkFrac  = darkCount  / Math.max(1, validPixels);
     const motionMean = hasPrev ? (motionDiffSum / Math.max(1, validPixels)) : 0;
+    const meanR = rSum / Math.max(1, validPixels);
+    const meanG = gSum / Math.max(1, validPixels);
+    const meanB = bSum / Math.max(1, validPixels);
 
-    // Exposure: clipping penalty + 4×4 uniformity penalty
+    // ── Sharpness: per-region normaliser — T-zone requires pore-level crispness ──
+    const sharpNorm = SHARPNESS_NORM[regionId] || 26;
+    const sharpnessScore = clamp01(gradMean / sharpNorm);
+
+    // ── Glare: HSV specular highlights ──
+    const glareScore = clamp01(1 - (glareFrac / 0.07));
+
+    // ── Exposure: clipping + 4×4 uniformity + red channel headroom ──
     const clipFrac = (clipLowCount + clipHighCount) / Math.max(1, validPixels);
     const clipPenalty = clamp01(clipFrac / 0.08);
     const cellMeans = cellLumSum.map((s, idx) => s / Math.max(1, cellCounts[idx]));
     const cellMeanAvg = cellMeans.reduce((a, b) => a + b, 0) / cellMeans.length;
     const cellVariance = cellMeans.reduce((s, v) => s + (v - cellMeanAvg) ** 2, 0) / cellMeans.length;
     const uniformityPenalty = clamp01(Math.sqrt(cellVariance) / 60);
-    const exposureScore = clamp01(1 - (clipPenalty * 0.6 + uniformityPenalty * 0.4));
+    const redHeadroomPenalty = clamp01((rHighCount / Math.max(1, validPixels)) / 0.10);
+    const exposureScore = clamp01(1 - (clipPenalty * 0.5 + uniformityPenalty * 0.3 + redHeadroomPenalty * 0.2));
 
-    const sharpnessScore = clamp01(gradMean / 26);
-    const contrastScore = clamp01(contrastStd / 42);
-    const glareScore = clamp01(1 - (glareFrac / 0.07));
+    // ── Occlusion ──
     const occlusionScore = clamp01(1 - (darkFrac / 0.35));
-    const stabilityScore = clamp01(1 - (motionMean / 22));
+
+    // ── Stability: per-region normaliser — T-zone tolerates less motion ──
+    const stabilityNorm = STABILITY_NORM[regionId] || 22;
+    const stabilityScore = clamp01(1 - (motionMean / stabilityNorm));
+
+    // ── Color fidelity: replaces luminance contrast — red-channel acne signal preservation ──
+    const redVariance = Math.max(0, rSqSum / Math.max(1, validPixels) - meanR * meanR);
+    const redVarScore   = clamp01(Math.sqrt(redVariance) / 30);       // color variation in patch
+    const rgDiffScore   = clamp01((meanR - meanG) / 20 + 0.5);        // warm skin signal; WB issues lower this
+    const redRangeScore = clamp01(1 - Math.abs(meanR - 128) / 128);   // channel not blown or crushed
+
+    let colorFidelityScore;
+    if (skinBaseline && skinBaseline.r > 0) {
+        // Relative to this person's baseline — works for all skin tones
+        const baselineRatio = meanR / skinBaseline.r;
+        const baselineScore = clamp01(1 - Math.abs(baselineRatio - 1.0) / 0.5);
+        colorFidelityScore = redVarScore * 0.40 + baselineScore * 0.35 + rgDiffScore * 0.25;
+    } else {
+        colorFidelityScore = redVarScore * 0.50 + rgDiffScore * 0.30 + redRangeScore * 0.20;
+    }
 
     const W = REGION_WEIGHTS[regionId] || WEIGHTS_DEFAULT;
     const qualityScore =
-        sharpnessScore  * W[0] +
-        glareScore      * W[1] +
-        exposureScore   * W[2] +
-        occlusionScore  * W[3] +
-        stabilityScore  * W[4] +
-        contrastScore   * W[5];
+        sharpnessScore      * W[0] +
+        glareScore          * W[1] +
+        exposureScore       * W[2] +
+        occlusionScore      * W[3] +
+        stabilityScore      * W[4] +
+        colorFidelityScore  * W[5];
 
-    // White-balance sanity (informational — returned for future use)
-    const meanR = rSum / Math.max(1, validPixels);
-    const meanG = gSum / Math.max(1, validPixels);
-    const meanB = bSum / Math.max(1, validPixels);
+    // WB sanity — used by instruction overlay and returned for logging
     let wbWarning = null;
-    if (meanG / Math.max(1, meanR) > 2.0)  wbWarning = 'fluorescent';
-    else if (meanB / Math.max(1, meanG) > 1.8) wbWarning = 'cold-led';
+    if (meanG / Math.max(1, meanR) > 1.8)       wbWarning = 'fluorescent';
+    else if (meanB / Math.max(1, meanG) > 1.6)  wbWarning = 'cold-led';
     else if (meanR / Math.max(1, meanB) > 2.5)  wbWarning = 'warm-incandescent';
 
     return {
@@ -1080,7 +1183,7 @@ function updateLiveRegions(landmarks, video) {
 
             let cat = 0;
             if (lock.locked)       cat = 3;
-            else if (best >= 55)   cat = 2;
+            else if (best >= 48)   cat = 2;
             else if (best > 0)     cat = 1;
 
             // Category can only go up within a scan
@@ -1146,6 +1249,7 @@ function captureCurrentFaceImageBase64() {
 }
 
 function completeScan() {
+    document.body.classList.remove('scan-active');
     isAnalyzing = true;
     LOG.section('completeScan() — 15s scan finished');
 
@@ -1553,7 +1657,12 @@ function resetScanner() {
     gateOpenSince = 0;
     prevGateWasOpen = false;
     lightingWarning = null;
+    lightingColourWarning = null;
+    shineAdvisory = false;
+    shineFrameCount = 0;
     coveringDetected = null;
+    skinBaseline = null;
+    document.body.classList.remove('scan-active');
     goodScanMs = 0;
     lastGoodFrameTime = 0;
     pulseSamples = [];

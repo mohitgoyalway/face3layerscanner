@@ -1022,3 +1022,36 @@ header {
 
   .processing-header h2 { font-size: 1.25rem; }
 }
+
+/* ── scan-active: maximise camera feed on mobile ── */
+@media (max-width: 768px) {
+  body.scan-active .container > header,
+  body.scan-active footer { display: none; }
+
+  body.scan-active .container { padding-top: 0; }
+
+  body.scan-active #scannerView {
+    height: calc(100dvh - 52px - 0.5rem);
+  }
+
+  body.scan-active .video-frame {
+    flex: 1;
+    aspect-ratio: unset;
+    max-height: none;
+    min-height: 0;
+  }
+
+  body.scan-active .mobile-scan-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(8, 8, 20, 0.82);
+    backdrop-filter: blur(8px);
+    z-index: 15;
+    padding: 5px 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0 0 var(--r-lg) var(--r-lg);
+    margin: 0;
+  }
+}
