@@ -147,6 +147,7 @@ const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true
 let isAnalyzing = false;
 const SCAN_DURATION  = 15000;
 const SCAN_EXTENSION = 10000; // extra ms allowed if <4 regions reach good quality by 15s
+const SCAN_PROGRESS_RING_GAP = 0.08;
 let pulseSamples = [];
 let respirationSamples = [];
 let blinkCount = 0;
@@ -421,25 +422,31 @@ function onResults(results) {
 
         // SCAN LOGIC
         if (scanStartTime > 0) {
-            statusText.textContent = "DEEP BIOMETRIC SCAN ACTIVE";
-            statusIndicator.classList.add('active');
+            const scanPaused = !captureGateState.ok;
+            statusText.textContent = scanPaused ? "SCAN PAUSED - ADJUST POSITION" : "DEEP BIOMETRIC SCAN ACTIVE";
+            statusIndicator.classList.toggle('active', !scanPaused);
 
-            if (!captureGateState.ok) {
+            if (scanPaused) {
                 LOG.warn('Capture gate BLOCKED — frame skipped', captureGateState.reasons);
                 lastGoodFrameTime = 0;
             }
 
             // Accumulate good scan time only while gate is open
-            if (captureGateState.ok) {
+            if (!scanPaused) {
                 const now = Date.now();
                 if (lastGoodFrameTime > 0) goodScanMs += now - lastGoodFrameTime;
                 lastGoodFrameTime = now;
             }
 
+            const scanProgress = Math.min(goodScanMs / SCAN_DURATION, 1);
+            drawScanProgressBoundary(ctx, landmarks, scanProgress, scanPaused, meshColor);
+
             if (goodScanMs < SCAN_DURATION) {
-                pulseSamples.push({ t: goodScanMs, g: getForeheadGreen(landmarks, video) });
-                respirationSamples.push({ t: goodScanMs, y: landmarks[1].y });
-                detectBlink(landmarks);
+                if (!scanPaused) {
+                    pulseSamples.push({ t: goodScanMs, g: getForeheadGreen(landmarks, video) });
+                    respirationSamples.push({ t: goodScanMs, y: landmarks[1].y });
+                    detectBlink(landmarks);
+                }
                 updateLiveRegions(landmarks, video);
 
                 // Live BPM
@@ -481,9 +488,11 @@ function onResults(results) {
                     completeScan();
                 } else {
                     // Extension phase: keep collecting data while region hints guide the user
-                    pulseSamples.push({ t: goodScanMs, g: getForeheadGreen(landmarks, video) });
-                    respirationSamples.push({ t: goodScanMs, y: landmarks[1].y });
-                    detectBlink(landmarks);
+                    if (!scanPaused) {
+                        pulseSamples.push({ t: goodScanMs, g: getForeheadGreen(landmarks, video) });
+                        respirationSamples.push({ t: goodScanMs, y: landmarks[1].y });
+                        detectBlink(landmarks);
+                    }
                     updateLiveRegions(landmarks, video);
                     timerText.textContent = '0.0s';
                     progressBarFill.style.width = '100%';
@@ -686,6 +695,84 @@ function computeCaptureGate(landmarks, video) {
     if (pitchDeviation > 0.24) reasons.push("Keep head level");
 
     return { ok: reasons.length === 0, reasons };
+}
+
+function drawScanProgressBoundary(ctx, landmarks, progress, isPaused, meshColor) {
+    if (!ctx || !landmarks || scanStartTime === 0) return;
+
+    const left = landmarks[234], right = landmarks[454], top = landmarks[10], chin = landmarks[152];
+    if (!left || !right || !top || !chin) return;
+
+    const minX = Math.min(left.x, right.x);
+    const maxX = Math.max(left.x, right.x);
+    const minY = Math.min(top.y, chin.y);
+    const maxY = Math.max(top.y, chin.y);
+
+    const cx = ((minX + maxX) / 2) * ctx.canvas.width;
+    const cy = ((minY + maxY) / 2) * ctx.canvas.height;
+    const rx = ((maxX - minX) / 2 + SCAN_PROGRESS_RING_GAP) * ctx.canvas.width;
+    const ry = ((maxY - minY) / 2 + SCAN_PROGRESS_RING_GAP * 0.72) * ctx.canvas.height;
+
+    if (!Number.isFinite(cx + cy + rx + ry) || rx < 20 || ry < 30) return;
+
+    const pct = Math.max(0, Math.min(1, progress));
+    const stroke = Math.max(4, Math.min(8, ctx.canvas.width * 0.008));
+    const start = -Math.PI / 2;
+    const end = start + (Math.PI * 2 * pct);
+    const progressColor = isPaused ? '#ff4444' : meshColor;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = isPaused ? 'rgba(255,68,68,0.35)' : 'rgba(236,97,14,0.45)';
+
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = stroke;
+    ctx.stroke();
+
+    if (pct > 0) {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, start, end);
+        ctx.strokeStyle = progressColor;
+        ctx.lineWidth = stroke + 1;
+        ctx.stroke();
+    }
+
+    // A compact numeric cue reduces ambiguity without covering the face.
+    const label = isPaused ? `PAUSED ${Math.round(pct * 100)}%` : `${Math.round(pct * 100)}%`;
+    const labelY = Math.max(22, cy - ry - 12);
+    ctx.shadowBlur = 0;
+    ctx.font = `700 ${Math.max(11, Math.min(16, ctx.canvas.width * 0.018))}px "Plus Jakarta Sans", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const textWidth = ctx.measureText(label).width;
+    const padX = 10;
+    const boxH = 24;
+    ctx.fillStyle = 'rgba(8,8,10,0.78)';
+    ctx.strokeStyle = isPaused ? 'rgba(255,68,68,0.42)' : 'rgba(236,97,14,0.42)';
+    ctx.lineWidth = 1;
+    const boxX = cx - textWidth / 2 - padX;
+    const boxY = labelY - boxH / 2;
+    const boxW = textWidth + padX * 2;
+    const boxR = 12;
+    ctx.beginPath();
+    ctx.moveTo(boxX + boxR, boxY);
+    ctx.lineTo(boxX + boxW - boxR, boxY);
+    ctx.quadraticCurveTo(boxX + boxW, boxY, boxX + boxW, boxY + boxR);
+    ctx.lineTo(boxX + boxW, boxY + boxH - boxR);
+    ctx.quadraticCurveTo(boxX + boxW, boxY + boxH, boxX + boxW - boxR, boxY + boxH);
+    ctx.lineTo(boxX + boxR, boxY + boxH);
+    ctx.quadraticCurveTo(boxX, boxY + boxH, boxX, boxY + boxH - boxR);
+    ctx.lineTo(boxX, boxY + boxR);
+    ctx.quadraticCurveTo(boxX, boxY, boxX + boxR, boxY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = isPaused ? '#ffcf66' : '#F5EDE6';
+    ctx.fillText(label, cx, labelY + 0.5);
+    ctx.restore();
 }
 
 function checkLighting() {
