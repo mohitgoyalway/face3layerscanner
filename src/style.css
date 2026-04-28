@@ -476,7 +476,7 @@ header {
 
 .live-region-item canvas {
   width: 100%;
-  aspect-ratio: 1;
+  height: auto;
   border-radius: var(--r-md);
   background: #000;
   border: 1px solid rgba(236,97,14,0.2);
@@ -636,7 +636,8 @@ header {
 
 #regionImagesGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  align-items: start;
   gap: 14px;
   width: 100%;
   max-width: 820px;
@@ -647,7 +648,7 @@ header {
 #regionImagesGrid canvas {
   display: block;
   width: 100%;
-  aspect-ratio: 1;
+  height: auto;
   border-radius: var(--r-md);
   border: 1px solid var(--border);
   background: var(--bg-2);
@@ -940,7 +941,7 @@ header {
 
   /* ── REGION CONFIRMATION VIEW ── */
   #regionImagesGrid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 8px;
   }
 

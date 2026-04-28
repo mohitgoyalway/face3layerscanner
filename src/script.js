@@ -616,44 +616,42 @@ function isValidTransform(m) {
     return Number.isFinite(det) && Math.abs(det) > 1e-4 && Math.abs(det) < 500;
 }
 
-function drawRegionFallback(region, landmarks, video) {
+function computeRegionBbox(region, landmarks, video) {
+    const vw = video.videoWidth, vh = video.videoHeight;
     const points = region.indices
         .map(idx => landmarks[idx])
         .filter(Boolean)
-        .map(p => ({ x: p.x * video.videoWidth, y: p.y * video.videoHeight }));
+        .map(p => ({ x: p.x * vw, y: p.y * vh }));
+    if (!points.length) return null;
 
-    if (!points.length) return;
+    const xs = points.map(p => p.x), ys = points.map(p => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
 
-    const xs = points.map(p => p.x);
-    const ys = points.map(p => p.y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-
-    const width = Math.max(2, maxX - minX);
-    const height = Math.max(2, maxY - minY);
+    const rw = Math.max(2, maxX - minX), rh = Math.max(2, maxY - minY);
     const crop = region.crop || {};
-    const padX = width * (crop.padX ?? region.pad ?? 0.2);
-    const padY = height * (crop.padY ?? region.pad ?? 0.2);
-    const offsetX = width * (crop.offsetX ?? 0);
-    const offsetY = height * (crop.offsetY ?? 0);
-    const faceWidth = Math.abs((landmarks[454]?.x ?? 0.8) - (landmarks[234]?.x ?? 0.2)) * video.videoWidth;
-    const faceHeight = Math.abs((landmarks[152]?.y ?? 0.85) - (landmarks[10]?.y ?? 0.15)) * video.videoHeight;
+    const padX = rw * (crop.padX ?? region.pad ?? 0.2);
+    const padY = rh * (crop.padY ?? region.pad ?? 0.2);
+    const cx = ((minX + maxX) / 2) + rw * (crop.offsetX ?? 0);
+    const cy = ((minY + maxY) / 2) + rh * (crop.offsetY ?? 0);
+    const faceW = Math.abs((landmarks[454]?.x ?? 0.8) - (landmarks[234]?.x ?? 0.2)) * vw;
+    const faceH = Math.abs((landmarks[152]?.y ?? 0.85) - (landmarks[10]?.y ?? 0.15)) * vh;
+    const tw = Math.max(rw + padX * 2, (crop.minFaceWidthRatio ?? 0) * faceW);
+    const th = Math.max(rh + padY * 2, (crop.minFaceHeightRatio ?? 0) * faceH);
 
-    const centerX = ((minX + maxX) / 2) + offsetX;
-    const centerY = ((minY + maxY) / 2) + offsetY;
-    const minW = (crop.minFaceWidthRatio ?? 0) * faceWidth;
-    const minH = (crop.minFaceHeightRatio ?? 0) * faceHeight;
-    const targetW = Math.max(width + (padX * 2), minW || 0);
-    const targetH = Math.max(height + (padY * 2), minH || 0);
+    const sx = Math.max(0, Math.round(cx - tw / 2));
+    const sy = Math.max(0, Math.round(cy - th / 2));
+    const sw = Math.max(2, Math.min(vw - sx, Math.round(tw)));
+    const sh = Math.max(2, Math.min(vh - sy, Math.round(th)));
 
-    const sx = Math.max(0, centerX - (targetW / 2));
-    const sy = Math.max(0, centerY - (targetH / 2));
-    const sw = Math.max(2, Math.min(video.videoWidth - sx, targetW));
-    const sh = Math.max(2, Math.min(video.videoHeight - sy, targetH));
+    return { sx, sy, sw, sh };
+}
 
-    offscreenCtx.drawImage(video, sx, sy, sw, sh, 0, 0, 800, 800);
+function drawRegionFallback(region, landmarks, video) {
+    const bbox = computeRegionBbox(region, landmarks, video);
+    if (!bbox) return;
+    const { sx, sy, sw, sh } = bbox;
+    offscreenCtx.drawImage(video, sx, sy, sw, sh, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
 }
 
 function clamp01(v) {
@@ -930,9 +928,9 @@ const STABILITY_NORM = {
     'live-Chin': 22, 'live-Jawline': 22,
 };
 
-function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
+function analyzeSampleQuality(regionId, imgData, width, height, nowTs) {
     const data = imgData;
-    const rowStride = sampleSize * 4;
+    const rowStride = width * 4;
 
     let lumSum = 0;
     let gradSum = 0;
@@ -946,16 +944,16 @@ function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
     let motionDiffSum = 0;
 
     const prev = previousSamples[regionId];
-    const hasPrev = prev && prev.length === data.length;
+    const hasPrev = prev && prev.data && prev.w === width && prev.h === height;
 
     const GRID = 4;
-    const cellSize = Math.floor(sampleSize / GRID);
+    const cellW = width / GRID, cellH = height / GRID;
     const cellLumSum = new Float32Array(GRID * GRID);
     const cellCounts = new Int32Array(GRID * GRID);
 
-    for (let y = 0; y < sampleSize - 1; y++) {
-        for (let x = 0; x < sampleSize - 1; x++) {
-            const i = ((y * sampleSize) + x) * 4;
+    for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+            const i = (y * width + x) * 4;
             const r = data[i], g = data[i + 1], b = data[i + 2];
             const lum = (0.299 * r) + (0.587 * g) + (0.114 * b);
             const lumX = (0.299 * data[i + 4]) + (0.587 * data[i + 5]) + (0.114 * data[i + 6]);
@@ -977,21 +975,21 @@ function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
             const S = maxC > 0 ? (maxC - minC) / maxC : 0;
             if (V > 0.90 && S < 0.15) glareCount++;
 
-            const cx = Math.min(Math.floor(x / cellSize), GRID - 1);
-            const cy = Math.min(Math.floor(y / cellSize), GRID - 1);
+            const cx = Math.min(Math.floor(x / cellW), GRID - 1);
+            const cy = Math.min(Math.floor(y / cellH), GRID - 1);
             cellLumSum[cy * GRID + cx] += lum;
             cellCounts[cy * GRID + cx]++;
 
             if (hasPrev) {
-                const prevLum = (0.299 * prev[i]) + (0.587 * prev[i + 1]) + (0.114 * prev[i + 2]);
+                const prevLum = (0.299 * prev.data[i]) + (0.587 * prev.data[i + 1]) + (0.114 * prev.data[i + 2]);
                 motionDiffSum += Math.abs(lum - prevLum);
             }
         }
     }
 
-    previousSamples[regionId] = new Uint8ClampedArray(data);
+    previousSamples[regionId] = { data: new Uint8ClampedArray(data), w: width, h: height };
 
-    const validPixels = (sampleSize - 1) * (sampleSize - 1);
+    const validPixels = (width - 1) * (height - 1);
     const gradMean  = gradSum  / Math.max(1, validPixels * 2);
     const glareFrac = glareCount / Math.max(1, validPixels);
     const darkFrac  = darkCount  / Math.max(1, validPixels);
@@ -1063,17 +1061,15 @@ function analyzeSampleQuality(regionId, imgData, sampleSize, nowTs) {
 }
 
 function updateLiveRegions(landmarks, video) {
-    if (offscreenCanvas.width !== 800) { offscreenCanvas.width = 800; offscreenCanvas.height = 800; }
     REGIONS.forEach(r => {
         const liveCanvas = document.getElementById(r.id);
         if (!liveCanvas) return;
-        const liveCtx = liveCanvas.getContext('2d', { willReadFrequently: true });
-        if (liveCanvas.width !== 800) { liveCanvas.width = 800; liveCanvas.height = 800; regionBuffers[r.id] = []; }
+
         if (!regionLocks[r.id]) regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
         const lockState = regionLocks[r.id];
-
         const tile = liveCanvas.parentElement;
         const indicator = tile.querySelector('.refining-indicator');
+
         if (lockState.locked) {
             tile.style.borderColor = 'rgba(0,230,118,0.8)';
             if (indicator) {
@@ -1083,29 +1079,32 @@ function updateLiveRegions(landmarks, video) {
             return;
         }
 
-        const srcPoints = r.anchors.map(idx => ({ x: landmarks[idx].x * video.videoWidth, y: landmarks[idx].y * video.videoHeight }));
-        const m = solveAffine(srcPoints, r.target);
+        // Native bbox crop — real resolution, real aspect ratio, zero distortion
+        const bbox = computeRegionBbox(r, landmarks, video);
+        if (!bbox) return;
+        const { sx, sy, sw, sh } = bbox;
 
-        // Prevent stale pixels bleeding between regions/frames.
-        offscreenCtx.setTransform(1, 0, 0, 1, 0, 0);
-        offscreenCtx.clearRect(0, 0, 800, 800);
-
-        const srcArea = triangleArea(srcPoints[0], srcPoints[1], srcPoints[2]);
-        if (!r.useBboxCrop && srcArea > 10 && isValidTransform(m)) {
-            offscreenCtx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
-            offscreenCtx.drawImage(video, 0, 0);
-            offscreenCtx.setTransform(1, 0, 0, 1, 0, 0);
-        } else {
-            // BBox path avoids catastrophic shearing/flipping for unstable regions (especially cheeks).
-            drawRegionFallback(r, landmarks, video);
+        if (offscreenCanvas.width !== sw || offscreenCanvas.height !== sh) {
+            offscreenCanvas.width = sw;
+            offscreenCanvas.height = sh;
         }
+        offscreenCtx.clearRect(0, 0, sw, sh);
+        offscreenCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
 
-        const sampleSize = 200;
-        const imgData = offscreenCtx.getImageData(300, 300, sampleSize, sampleSize).data;
+        // Single getImageData: used for both quality scoring and buffer storage
+        const nativeData = offscreenCtx.getImageData(0, 0, sw, sh);
         const nowTs = Date.now();
-        const quality = analyzeSampleQuality(r.id, imgData, sampleSize, nowTs);
+        const quality = analyzeSampleQuality(r.id, nativeData.data, sw, sh, nowTs);
 
-        const qualityMultiplier = r.quality || 1.0; 
+        const qualityMultiplier = r.quality || 1.0;
+
+        // Resize live canvas to match native crop (reset buffer if size changed)
+        if (liveCanvas.width !== sw || liveCanvas.height !== sh) {
+            liveCanvas.width = sw;
+            liveCanvas.height = sh;
+            regionBuffers[r.id] = [];
+        }
+        const liveCtx = liveCanvas.getContext('2d', { willReadFrequently: true });
 
         const buffer = regionBuffers[r.id];
         const gateBlocked = !captureGateState.ok;
@@ -1118,22 +1117,20 @@ function updateLiveRegions(landmarks, video) {
             return;
         }
 
+        // Always show current frame in live preview tile
+        liveCtx.putImageData(nativeData, 0, 0);
+
         const effectiveScore = quality.score / qualityMultiplier;
         if (buffer.length < MAX_BUFFER_SIZE || effectiveScore > buffer[buffer.length - 1].score) {
-            buffer.push({ score: effectiveScore, quality: quality.score, data: offscreenCtx.getImageData(0, 0, 800, 800), ts: nowTs });
+            buffer.push({ score: effectiveScore, quality: quality.score, data: nativeData, ts: nowTs });
             buffer.sort((a, b) => b.score - a.score);
             if (buffer.length > MAX_BUFFER_SIZE) buffer.pop();
-            
-            // ZERO GHOSTING: Always show the single sharpest frame at 100% opacity
-            liveCtx.globalAlpha = 1.0;
-            liveCtx.drawImage(offscreenCanvas, 0, 0);
 
             if (quality.score >= (r.lockThreshold || 80) && buffer.length >= 3) {
                 lockState.locked = true;
                 lockState.quality = quality.score;
                 lockState.ts = nowTs;
                 LOG.ok(`Region LOCKED: ${r.name}`, { quality: quality.score, threshold: r.lockThreshold, framesInBuffer: buffer.length });
-                // Log how many regions are now locked total
                 const lockedCount = REGIONS.filter(reg => regionLocks[reg.id]?.locked).length;
                 LOG.info(`Locked regions: ${lockedCount} / ${REGIONS.length}`);
             }
@@ -1302,29 +1299,29 @@ function populateRegionConfirmation() {
         label.style.cssText = 'font-size:0.7rem;letter-spacing:2px;color:#aaa;font-family:Montserrat,sans-serif;';
 
         const cnv = document.createElement('canvas');
-        cnv.width  = 200;
-        cnv.height = 200;
-        cnv.style.cssText = 'width:100%;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:#0d0d1a;';
+        cnv.style.cssText = 'width:100%;height:auto;display:block;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:#0d0d1a;';
 
         const badge = document.createElement('div');
         badge.style.cssText = 'font-size:0.65rem;letter-spacing:1px;font-family:Montserrat,sans-serif;';
 
         if (buf.length > 0 && buf[0].data) {
-            // Draw the best locked frame scaled down from 800×800 → 200×200
-            const tmp = document.createElement('canvas');
-            tmp.width = 800; tmp.height = 800;
-            tmp.getContext('2d').putImageData(buf[0].data, 0, 0);
-            cnv.getContext('2d').drawImage(tmp, 0, 0, 800, 800, 0, 0, 200, 200);
+            // Render at native resolution — ImageData already carries .width and .height
+            const imgData = buf[0].data;
+            cnv.width  = imgData.width;
+            cnv.height = imgData.height;
+            cnv.getContext('2d').putImageData(imgData, 0, 0);
             badge.textContent  = lock.locked ? `LOCKED ✓  Q:${lock.quality}` : `BEST FRAME  Q:${Math.round(buf[0].quality ?? 0)}`;
             badge.style.color  = lock.locked ? '#00d4aa' : '#ff9933';
         } else {
+            cnv.width  = 200;
+            cnv.height = 150;
             const ctx = cnv.getContext('2d');
             ctx.fillStyle = '#0d0d1a';
-            ctx.fillRect(0, 0, 200, 200);
+            ctx.fillRect(0, 0, cnv.width, cnv.height);
             ctx.fillStyle = '#555';
             ctx.font = 'bold 13px Montserrat,sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('NO DATA', 100, 100);
+            ctx.fillText('NO DATA', cnv.width / 2, cnv.height / 2);
             badge.textContent = 'NOT CAPTURED';
             badge.style.color = '#ff4c4c';
         }
