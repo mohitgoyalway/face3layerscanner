@@ -215,9 +215,35 @@ header {
   font-family: var(--font-body);
   font-size: 0.9375rem;
   color: var(--text-2);
-  margin-bottom: 2rem;
-  max-width: 400px;
+  margin-bottom: 1.75rem;
+  max-width: 520px;
   line-height: 1.65;
+}
+
+.trust-chips {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 1rem;
+  max-width: 520px;
+}
+
+.trust-chips span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 6px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid rgba(236,97,14,0.18);
+  background: rgba(236,97,14,0.055);
+  color: var(--text-2);
+  font-family: var(--font-body);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
 }
 
 /* === BUTTONS === */

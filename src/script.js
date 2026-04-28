@@ -143,8 +143,8 @@ const deepProgressFill = document.getElementById('deepProgressFill');
 
 const offscreenCanvas = document.createElement('canvas');
 const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
-const DEFAULT_SETUP_INSTRUCTION = setupInstruction?.textContent || 'Position yourself in good lighting for a 15-second deep biometric scan.';
-const DEFAULT_START_BUTTON_TEXT = startBtn?.textContent || 'BEGIN SCAN';
+const DEFAULT_SETUP_INSTRUCTION = setupInstruction?.textContent || 'Scan your face for instant insights on oiliness, texture, marks, sensitivity, and breakout-prone areas.';
+const DEFAULT_START_BUTTON_TEXT = startBtn?.textContent || 'START SKIN SCAN';
 
 // SCAN STATE
 let isAnalyzing = false;
@@ -357,7 +357,7 @@ function handleCameraStartupError(error) {
 }
 
 function startScanner() {
-    LOG.section('startScanner() — BEGIN SCAN button clicked');
+    LOG.section('startScanner() — start skin scan button clicked');
     startBtn.disabled = true;
     startBtn.textContent = DEFAULT_START_BUTTON_TEXT;
     if (setupInstruction) setupInstruction.textContent = DEFAULT_SETUP_INSTRUCTION;
