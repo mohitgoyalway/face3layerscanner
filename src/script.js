@@ -326,8 +326,12 @@ function startScanner() {
         width: 1280,
         height: 720
     });
-    camera.start();
-    LOG.ok('Camera.start() called — waiting for first frame');
+    // Defer camera.start() by two paint frames so the browser paints the
+    // scan-active expanded layout before the camera permission dialog appears.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        camera.start();
+        LOG.ok('Camera.start() called — waiting for first frame');
+    }));
 }
 
 /* ---------------- CORE SCAN LOOP ---------------- */

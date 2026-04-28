@@ -1041,6 +1041,12 @@ header {
     min-height: 0;
   }
 
+  /* Keep video filling the frame even before stream loads (no height-jump) */
+  body.scan-active #video {
+    height: 100%;
+    object-fit: cover;
+  }
+
   body.scan-active .mobile-scan-progress {
     position: absolute;
     bottom: 0;
