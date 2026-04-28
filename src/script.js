@@ -633,7 +633,7 @@ function onResults(results) {
                     if (mobileScanProgress) {
                         mobileScanProgress.querySelectorAll('.msp-item').forEach(el => {
                             el.setAttribute('data-state', '0');
-                            el.querySelector('.msp-state').textContent = 'NOT DETECTED';
+                            el.querySelector('.msp-state').textContent = CAPTURE_LABELS[0];
                         });
                         mobileScanProgress.classList.remove('hidden');
                     }
@@ -1092,6 +1092,31 @@ const STABILITY_NORM = {
     'live-Left-Cheek': 22, 'live-Right-Cheek': 22,
     'live-Chin': 22, 'live-Jawline': 22,
 };
+const CAPTURE_LABELS = ['FINDING', 'HOLD STEADY', 'CAPTURED', 'VERIFIED'];
+
+function getRegionCaptureCategory(regionId) {
+    const lock = regionLocks[regionId] || {};
+    const buf = regionBuffers[regionId] || [];
+    const best = buf.length > 0 ? buf[0].quality : 0;
+
+    if (lock.locked) return 3;
+    if (best >= 48) return 2;
+    if (best > 0) return 1;
+    return 0;
+}
+
+function getRegionCaptureLabel(regionId) {
+    return CAPTURE_LABELS[getRegionCaptureCategory(regionId)] || CAPTURE_LABELS[0];
+}
+
+function getRegionQualityGuidance(region, quality) {
+    if (!quality) return 'Finding region';
+    if (quality.wbWarning === 'fluorescent' || quality.wbWarning === 'cold-led') return 'Needs softer light';
+    if (quality.wbWarning === 'warm-incandescent') return 'Needs neutral light';
+    if (quality.score >= (region.lockThreshold || 80)) return 'Verifying';
+    if (quality.score >= 58) return 'Captured';
+    return 'Hold steady';
+}
 
 function analyzeSampleQuality(regionId, imgData, width, height, nowTs) {
     const data = imgData;
@@ -1236,10 +1261,9 @@ function updateLiveRegions(landmarks, video) {
         const indicator = tile.querySelector('.refining-indicator');
 
         if (lockState.locked) {
-            tile.style.borderColor = 'rgba(0,230,118,0.8)';
+            tile.dataset.state = '3';
             if (indicator) {
-                indicator.textContent = `ULTRA-HD LOCKED (${lockState.quality})`;
-                indicator.style.color = '#55ff55';
+                indicator.textContent = 'VERIFIED';
             }
             return;
         }
@@ -1274,10 +1298,9 @@ function updateLiveRegions(landmarks, video) {
         const buffer = regionBuffers[r.id];
         const gateBlocked = !captureGateState.ok;
         if (gateBlocked) {
-            tile.style.borderColor = 'rgba(255,255,255,0.12)';
+            tile.dataset.state = String(getRegionCaptureCategory(r.id));
             if (indicator) {
-                indicator.textContent = captureGateState.reasons[0] || 'HOLD STEADY';
-                indicator.style.color = '#ffcf66';
+                indicator.textContent = captureGateState.reasons[0] || getRegionCaptureLabel(r.id);
             }
             return;
         }
@@ -1301,39 +1324,38 @@ function updateLiveRegions(landmarks, video) {
             }
         }
 
-        if (lockState.locked) {
-            tile.style.borderColor = 'rgba(0,230,118,0.8)';
-        } else if (buffer.length > 0) {
-            tile.style.borderColor = 'rgba(236,97,14,0.7)';
-        }
+        const captureCategory = getRegionCaptureCategory(r.id);
+        tile.dataset.state = String(captureCategory);
 
         if (indicator) {
             if (lockState.locked) {
-                indicator.textContent = `ULTRA-HD LOCKED (${lockState.quality})`;
-                indicator.style.color = '#55ff55';
+                indicator.textContent = 'VERIFIED';
             } else {
-                indicator.textContent = `QUALITY ${quality.score} | ${Math.min(100, buffer.length * 10)}%`;
-                indicator.style.color = quality.score >= 70 ? '#55ff55' : '#00d2ff';
+                indicator.textContent = getRegionQualityGuidance(r, quality);
             }
         }
     });
 
     // Update regions-ready counter (desktop only — hidden on mobile via CSS)
     if (regionReadyCount) {
-        const locked = REGIONS.filter(r => regionLocks[r.id]?.locked).length;
+        const locked = REGIONS.filter(r => getRegionCaptureCategory(r.id) === 3).length;
+        const captured = REGIONS.filter(r => getRegionCaptureCategory(r.id) >= 2).length;
         const total  = REGIONS.length;
+        const focusRegion = REGIONS.find(r => getRegionCaptureCategory(r.id) < 2);
         regionReadyCount.classList.remove('hidden', 'all-locked');
         if (locked === 0) {
-            regionReadyCount.textContent = 'Positioning…';
+            regionReadyCount.textContent = captured > 0
+                ? `${captured} of ${total} regions captured - hold steady`
+                : 'Building region checklist - hold steady';
             regionReadyCount.style.color = '';
         } else if (locked < total - 1) {
-            regionReadyCount.textContent = `${locked} of ${total} regions locked`;
+            regionReadyCount.textContent = `${locked} of ${total} regions verified - focus on ${focusRegion?.name || 'remaining regions'}`;
             regionReadyCount.style.color = '#F0A030';
         } else if (locked === total - 1) {
-            regionReadyCount.textContent = `${locked} of ${total} regions locked — almost done`;
+            regionReadyCount.textContent = `${locked} of ${total} regions verified - almost done`;
             regionReadyCount.style.color = '#a0e080';
         } else {
-            regionReadyCount.textContent = `ALL ${total} REGIONS LOCKED ✓`;
+            regionReadyCount.textContent = `ALL ${total} REGIONS VERIFIED`;
             regionReadyCount.style.color = '#00e676';
             regionReadyCount.classList.add('all-locked');
         }
@@ -1341,16 +1363,8 @@ function updateLiveRegions(landmarks, video) {
 
     // Update mobile progress list (only meaningful when visible)
     if (mobileScanProgress && !mobileScanProgress.classList.contains('hidden')) {
-        const CAT_LABELS = ['NOT DETECTED', 'LOW QUALITY', 'GOOD QUALITY', 'LOCKED ✓'];
         REGIONS.forEach(r => {
-            const lock   = regionLocks[r.id] || {};
-            const buf    = regionBuffers[r.id] || [];
-            const best   = buf.length > 0 ? buf[0].quality : 0;
-
-            let cat = 0;
-            if (lock.locked)       cat = 3;
-            else if (best >= 48)   cat = 2;
-            else if (best > 0)     cat = 1;
+            const cat = getRegionCaptureCategory(r.id);
 
             // Category can only go up within a scan
             if (cat > (bestRegionCategory[r.id] || 0)) bestRegionCategory[r.id] = cat;
@@ -1360,7 +1374,7 @@ function updateLiveRegions(landmarks, video) {
             if (!item) return;
             if (parseInt(item.getAttribute('data-state')) !== displayCat) {
                 item.setAttribute('data-state', displayCat);
-                item.querySelector('.msp-state').textContent = CAT_LABELS[displayCat];
+                item.querySelector('.msp-state').textContent = CAPTURE_LABELS[displayCat];
             }
         });
     }
@@ -1804,13 +1818,13 @@ function resetScanner() {
     LOG_ENTRIES.length = 0; // clear log for the next scan session
     resultsSection.classList.add('hidden'); analysisView.classList.add('hidden'); regionConfirmationView.classList.add('hidden');
     setupView.classList.remove('hidden'); analysisOverlay.classList.add('hidden'); liveRegionRow.classList.add('hidden');
-    if (regionReadyCount) { regionReadyCount.classList.add('hidden'); regionReadyCount.classList.remove('all-locked'); regionReadyCount.textContent = 'Positioning…'; regionReadyCount.style.color = ''; }
+    if (regionReadyCount) { regionReadyCount.classList.add('hidden'); regionReadyCount.classList.remove('all-locked'); regionReadyCount.textContent = 'Building region checklist'; regionReadyCount.style.color = ''; }
     if (instructionOverlay) instructionOverlay.classList.add('hidden');
     if (mobileScanProgress) {
         mobileScanProgress.classList.add('hidden');
         mobileScanProgress.querySelectorAll('.msp-item').forEach(el => {
             el.setAttribute('data-state', '0');
-            el.querySelector('.msp-state').textContent = 'NOT DETECTED';
+            el.querySelector('.msp-state').textContent = CAPTURE_LABELS[0];
         });
     }
     REGIONS.forEach(r => { bestRegionCategory[r.id] = 0; });
@@ -1862,10 +1876,10 @@ function resetScanner() {
         }
         const tile = liveCanvas?.parentElement;
         if (tile) tile.style.borderColor = '';
+        if (tile) tile.dataset.state = '0';
         const indicator = tile?.querySelector('.refining-indicator');
         if (indicator) {
-            indicator.textContent = 'RECONSTRUCTING...';
-            indicator.style.color = '#00d2ff';
+            indicator.textContent = 'FINDING';
         }
     });
 

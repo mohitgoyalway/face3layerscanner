@@ -74,71 +74,71 @@
 
                     <!-- NEW: LIVE REGION PREVIEW ROW -->
                     <div id="liveRegionRow" class="live-region-row hidden">
-                        <div class="live-region-item">
+                        <div class="live-region-item" data-state="0">
                             <canvas id="live-Forehead"></canvas>
-                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <div class="refining-indicator">FINDING</div>
                             <div class="live-biometric-badge">BPM: <span id="liveBPM">--</span></div>
                             <span>FOREHEAD</span>
                         </div>
-                        <div class="live-region-item">
+                        <div class="live-region-item" data-state="0">
                             <canvas id="live-Nose"></canvas>
-                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <div class="refining-indicator">FINDING</div>
                             <span>NOSE</span>
                         </div>
-                        <div class="live-region-item">
+                        <div class="live-region-item" data-state="0">
                             <canvas id="live-Left-Cheek"></canvas>
-                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <div class="refining-indicator">FINDING</div>
                             <span>L. CHEEK</span>
                         </div>
-                        <div class="live-region-item">
+                        <div class="live-region-item" data-state="0">
                             <canvas id="live-Right-Cheek"></canvas>
-                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <div class="refining-indicator">FINDING</div>
                             <span>R. CHEEK</span>
                         </div>
-                        <div class="live-region-item">
+                        <div class="live-region-item" data-state="0">
                             <canvas id="live-Chin"></canvas>
-                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <div class="refining-indicator">FINDING</div>
                             <span>CHIN</span>
                         </div>
-                        <div class="live-region-item">
+                        <div class="live-region-item" data-state="0">
                             <canvas id="live-Jawline"></canvas>
-                            <div class="refining-indicator">RECONSTRUCTING...</div>
+                            <div class="refining-indicator">FINDING</div>
                             <span>JAWLINE</span>
                         </div>
                     </div>
-                    <div id="regionReadyCount" class="region-ready-count hidden">Positioning...</div>
+                    <div id="regionReadyCount" class="region-ready-count hidden">Building region checklist</div>
 
                     <!-- Mobile-only: compact region quality list replaces live tiles -->
                     <div id="mobileScanProgress" class="mobile-scan-progress hidden">
                         <div class="msp-item" data-region="live-Forehead" data-state="0">
                             <span class="msp-dot"></span>
                             <span class="msp-name">FOREHEAD</span>
-                            <span class="msp-state">NOT DETECTED</span>
+                            <span class="msp-state">FINDING</span>
                         </div>
                         <div class="msp-item" data-region="live-Nose" data-state="0">
                             <span class="msp-dot"></span>
                             <span class="msp-name">NOSE</span>
-                            <span class="msp-state">NOT DETECTED</span>
+                            <span class="msp-state">FINDING</span>
                         </div>
                         <div class="msp-item" data-region="live-Left-Cheek" data-state="0">
                             <span class="msp-dot"></span>
                             <span class="msp-name">L. CHEEK</span>
-                            <span class="msp-state">NOT DETECTED</span>
+                            <span class="msp-state">FINDING</span>
                         </div>
                         <div class="msp-item" data-region="live-Right-Cheek" data-state="0">
                             <span class="msp-dot"></span>
                             <span class="msp-name">R. CHEEK</span>
-                            <span class="msp-state">NOT DETECTED</span>
+                            <span class="msp-state">FINDING</span>
                         </div>
                         <div class="msp-item" data-region="live-Chin" data-state="0">
                             <span class="msp-dot"></span>
                             <span class="msp-name">CHIN</span>
-                            <span class="msp-state">NOT DETECTED</span>
+                            <span class="msp-state">FINDING</span>
                         </div>
                         <div class="msp-item" data-region="live-Jawline" data-state="0">
                             <span class="msp-dot"></span>
                             <span class="msp-name">JAWLINE</span>
-                            <span class="msp-state">NOT DETECTED</span>
+                            <span class="msp-state">FINDING</span>
                         </div>
                     </div>
                 </div>
