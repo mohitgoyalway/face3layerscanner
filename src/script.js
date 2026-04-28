@@ -113,6 +113,7 @@ function downloadLogAsFile() {
 const video = document.getElementById('video');
 const canvas = document.getElementById('overlay');
 const startBtn = document.getElementById('startScanner');
+const setupInstruction = document.querySelector('#setupView .instruction');
 const setupView = document.getElementById('setupView');
 const scannerView = document.getElementById('scannerView');
 const statusText = document.getElementById('statusText');
@@ -142,6 +143,8 @@ const deepProgressFill = document.getElementById('deepProgressFill');
 
 const offscreenCanvas = document.createElement('canvas');
 const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+const DEFAULT_SETUP_INSTRUCTION = setupInstruction?.textContent || 'Position yourself in good lighting for a 15-second deep biometric scan.';
+const DEFAULT_START_BUTTON_TEXT = startBtn?.textContent || 'BEGIN SCAN';
 
 // SCAN STATE
 let isAnalyzing = false;
@@ -298,8 +301,66 @@ function initFaceMesh() {
     LOG.ok('onResults callback registered');
 }
 
+function getCameraStartupMessage(error) {
+    const name = error?.name || '';
+
+    if (['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(name)) {
+        return 'Camera permission is blocked. Allow camera access in your browser settings, then try again.';
+    }
+    if (['NotFoundError', 'DevicesNotFoundError'].includes(name)) {
+        return 'No camera was found. Connect a camera and try again.';
+    }
+    if (['NotReadableError', 'TrackStartError'].includes(name)) {
+        return 'Camera is already in use or unavailable. Close other apps using it, then try again.';
+    }
+    if (['OverconstrainedError', 'ConstraintNotSatisfiedError'].includes(name)) {
+        return 'This camera does not support the requested scan settings. Try another camera or browser.';
+    }
+    if (name === 'MediaPipeUnavailable') {
+        return 'Face detection did not load. Check your connection and refresh the page.';
+    }
+    if (name === 'CameraUtilityUnavailable') {
+        return 'Camera controls did not load. Check your connection and refresh the page.';
+    }
+
+    return 'Camera could not start. Check browser permission and try again.';
+}
+
+function handleCameraStartupError(error) {
+    const message = getCameraStartupMessage(error);
+    LOG.err('Camera startup failed', {
+        name: error?.name || 'UnknownError',
+        message: error?.message || String(error || ''),
+        userMessage: message
+    });
+
+    if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+    }
+
+    camera = null;
+    isAnalyzing = false;
+    document.body.classList.remove('scan-active');
+    scannerView.classList.add('hidden');
+    analysisOverlay.classList.add('hidden');
+    liveRegionRow.classList.add('hidden');
+    if (mobileScanProgress) mobileScanProgress.classList.add('hidden');
+    if (instructionOverlay) instructionOverlay.classList.add('hidden');
+    setupView.classList.remove('hidden');
+
+    statusText.textContent = 'CAMERA UNAVAILABLE';
+    statusIndicator.classList.remove('active');
+    if (setupInstruction) setupInstruction.textContent = message;
+    startBtn.textContent = 'TRY AGAIN';
+    startBtn.disabled = false;
+}
+
 function startScanner() {
     LOG.section('startScanner() — BEGIN SCAN button clicked');
+    startBtn.disabled = true;
+    startBtn.textContent = DEFAULT_START_BUTTON_TEXT;
+    if (setupInstruction) setupInstruction.textContent = DEFAULT_SETUP_INSTRUCTION;
     setupView.classList.add('hidden');
     scannerView.classList.remove('hidden');
     document.body.classList.add('scan-active');
@@ -308,12 +369,15 @@ function startScanner() {
         LOG.warn('FaceMesh not ready at scan start — calling initFaceMesh()');
         initFaceMesh();
     }
+    if (!faceMesh) {
+        handleCameraStartupError({ name: 'MediaPipeUnavailable', message: 'FaceMesh constructor unavailable' });
+        return;
+    }
 
     const CameraConstructor = window.Camera;
     if (!CameraConstructor) {
         LOG.err('MediaPipe Camera utility NOT loaded — cannot access webcam');
-        console.error("MediaPipe Camera utility not loaded.");
-        alert("Camera initialization failed. Please refresh.");
+        handleCameraStartupError({ name: 'CameraUtilityUnavailable', message: 'MediaPipe Camera utility unavailable' });
         return;
     }
 
@@ -330,8 +394,22 @@ function startScanner() {
     // Defer camera.start() by two paint frames so the browser paints the
     // scan-active expanded layout before the camera permission dialog appears.
     requestAnimationFrame(() => requestAnimationFrame(() => {
-        camera.start();
-        LOG.ok('Camera.start() called — waiting for first frame');
+        try {
+            const startResult = camera.start();
+            if (startResult && typeof startResult.then === 'function') {
+                startResult
+                    .then(() => {
+                        startBtn.disabled = false;
+                        LOG.ok('Camera.start() resolved — waiting for first frame');
+                    })
+                    .catch(handleCameraStartupError);
+            } else {
+                startBtn.disabled = false;
+                LOG.ok('Camera.start() called — waiting for first frame');
+            }
+        } catch (error) {
+            handleCameraStartupError(error);
+        }
     }));
 }
 
@@ -1758,6 +1836,9 @@ function resetScanner() {
     blinkCount = 0;
 
     // Reset visible scan/analysis UI state so next run starts clean.
+    if (setupInstruction) setupInstruction.textContent = DEFAULT_SETUP_INSTRUCTION;
+    startBtn.textContent = DEFAULT_START_BUTTON_TEXT;
+    startBtn.disabled = false;
     statusText.textContent = "INITIALIZING...";
     statusIndicator.classList.remove('active');
     timerText.textContent = `${(SCAN_DURATION / 1000).toFixed(1)}s`;
