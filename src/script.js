@@ -301,6 +301,7 @@ function startScanner() {
     LOG.section('startScanner() — BEGIN SCAN button clicked');
     setupView.classList.add('hidden');
     scannerView.classList.remove('hidden');
+    document.body.classList.add('scan-active');
 
     if (!faceMesh) {
         LOG.warn('FaceMesh not ready at scan start — calling initFaceMesh()');
@@ -529,7 +530,6 @@ function onResults(results) {
                 goodScanMs = 0;
                 lastGoodFrameTime = 0;
                 analysisOverlay.classList.remove('hidden');
-                document.body.classList.add('scan-active');
                 REGIONS.forEach(r => {
                     regionBuffers[r.id] = [];
                     regionLocks[r.id] = { locked: false, quality: 0, ts: 0 };
