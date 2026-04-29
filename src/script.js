@@ -1533,6 +1533,170 @@ function populateRegionConfirmation() {
     });
 }
 
+const REGION_PAYLOAD_KEYS = {
+    'live-Forehead': 'forehead',
+    'live-Nose': 'nose',
+    'live-Left-Cheek': 'left_cheek',
+    'live-Right-Cheek': 'right_cheek',
+    'live-Chin': 'chin',
+    'live-Jawline': 'jawline'
+};
+
+function metricClamp(v) {
+    return Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
+}
+
+function metricRound(v) {
+    return Math.round(metricClamp(v) * 1000) / 1000;
+}
+
+function getConfirmedRegionIds() {
+    const boxes = regionImagesGrid.querySelectorAll('.confirm-region-selector input[type="checkbox"]');
+    if (!boxes.length) return new Set(REGIONS.map(r => r.id));
+    return new Set([...boxes].filter(box => box.checked).map(box => box.dataset.region));
+}
+
+function extractSkinSignalMetrics(region, imgData, lockState) {
+    const data = imgData?.data;
+    const width = imgData?.width || 0;
+    const height = imgData?.height || 0;
+    if (!data || width < 2 || height < 2) return null;
+
+    let lumSum = 0, lumSqSum = 0, gradSum = 0;
+    let rSum = 0, gSum = 0, bSum = 0;
+    let redCount = 0, redBrightCount = 0, glareCount = 0, darkSpotCount = 0;
+    let leftLumSum = 0, rightLumSum = 0, leftCount = 0, rightCount = 0;
+    const valid = (width - 1) * (height - 1);
+
+    for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+            const i = (y * width + x) * 4;
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            const lumX = 0.299 * data[i + 4] + 0.587 * data[i + 5] + 0.114 * data[i + 6];
+            const rowNext = i + width * 4;
+            const lumY = 0.299 * data[rowNext] + 0.587 * data[rowNext + 1] + 0.114 * data[rowNext + 2];
+
+            lumSum += lum;
+            lumSqSum += lum * lum;
+            gradSum += Math.abs(lum - lumX) + Math.abs(lum - lumY);
+            rSum += r; gSum += g; bSum += b;
+
+            const redExcess = r - ((g + b) / 2);
+            if (redExcess > 22 && r > 65) redCount++;
+            if (redExcess > 28 && r > 120 && g > 55) redBrightCount++;
+
+            const maxC = Math.max(r, g, b);
+            const minC = Math.min(r, g, b);
+            const v = maxC / 255;
+            const s = maxC > 0 ? (maxC - minC) / maxC : 0;
+            if (v > 0.90 && s < 0.16) glareCount++;
+
+            if (x < width / 2) { leftLumSum += lum; leftCount++; }
+            else { rightLumSum += lum; rightCount++; }
+        }
+    }
+
+    const meanLum = lumSum / Math.max(1, valid);
+    for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+            const i = (y * width + x) * 4;
+            const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            if (lum < meanLum - 24) darkSpotCount++;
+        }
+    }
+
+    const lumStd = Math.sqrt(Math.max(0, lumSqSum / Math.max(1, valid) - meanLum * meanLum));
+    const gradMean = gradSum / Math.max(1, valid * 2);
+    const redFrac = redCount / Math.max(1, valid);
+    const redBrightFrac = redBrightCount / Math.max(1, valid);
+    const glareFrac = glareCount / Math.max(1, valid);
+    const darkFrac = darkSpotCount / Math.max(1, valid);
+    const leftMean = leftLumSum / Math.max(1, leftCount);
+    const rightMean = rightLumSum / Math.max(1, rightCount);
+
+    const texture = metricClamp((gradMean / 30) * 0.58 + (lumStd / 58) * 0.42);
+    const redness = metricClamp(redFrac / 0.14);
+    const shine = metricClamp(glareFrac / 0.08);
+    const pigmentation = metricClamp(darkFrac / 0.20);
+    const toneVariance = metricClamp(lumStd / 62);
+    const toneAsymmetry = metricClamp(Math.abs(leftMean - rightMean) / 58);
+    const hydration = metricClamp(1 - (texture * 0.34 + pigmentation * 0.18 + shine * 0.16));
+    const poreTexture = metricClamp((gradMean / 34) * 0.72 + shine * 0.18 + texture * 0.10);
+    const fineLines = metricClamp((gradMean / 42) * 0.70 + (lumStd / 70) * 0.30);
+    const acneRedness = metricClamp(redness * 0.70 + texture * 0.18 + shine * 0.12);
+
+    const key = REGION_PAYLOAD_KEYS[region.id];
+    const metrics = {
+        _meta: {
+            selected: true,
+            source: 'client_image_proxy',
+            metrics_version: 'visible-signal-v1',
+            quality: Math.round(lockState?.quality || regionBuffers[region.id]?.[0]?.quality || 0),
+            locked: !!lockState?.locked,
+            crop_width: width,
+            crop_height: height
+        },
+        erythema_index: metricRound(redness),
+        texture_variance: metricRound(texture),
+        hydration_proxy: metricRound(hydration)
+    };
+
+    if (['forehead', 'nose'].includes(key)) {
+        metrics.gloss_reflectance_score = metricRound(shine);
+        metrics.pore_diameter_variance = metricRound(poreTexture);
+        metrics.comedone_density = metricRound(metricClamp((poreTexture * 0.55) + (shine * 0.30) + (darkFrac / 0.24) * 0.15));
+    }
+    if (['left_cheek', 'right_cheek'].includes(key)) {
+        metrics.pih_density = metricRound(pigmentation);
+        metrics.hyperpigmented_lesion_count = metricRound(metricClamp(darkFrac / 0.12));
+        metrics.melanin_variance_score = metricRound(toneVariance);
+        metrics.tone_asymmetry_score = metricRound(toneAsymmetry);
+        metrics.papule_density = metricRound(acneRedness);
+    }
+    if (key === 'chin' || key === 'jawline') {
+        metrics.papule_density = metricRound(acneRedness);
+        metrics.pustule_density = metricRound(metricClamp(redBrightFrac / 0.08));
+        metrics.comedone_density = metricRound(metricClamp((poreTexture * 0.45) + (darkFrac / 0.20) * 0.25));
+    }
+    if (key === 'forehead' || key === 'jawline') {
+        metrics.wrinkle_depth_index = metricRound(fineLines);
+        metrics.fine_line_density = metricRound(fineLines);
+    }
+    if (key === 'jawline') {
+        metrics.sagging_index = metricRound(metricClamp(toneAsymmetry * 0.45 + texture * 0.22));
+        metrics.elasticity_proxy = metricRound(metricClamp(1 - (texture * 0.34 + toneAsymmetry * 0.26)));
+    }
+
+    return metrics;
+}
+
+function buildVerifiedRegionPayload() {
+    const selectedIds = getConfirmedRegionIds();
+    const regions = {};
+    const region_meta = {};
+
+    REGIONS.forEach(region => {
+        const key = REGION_PAYLOAD_KEYS[region.id];
+        const selected = selectedIds.has(region.id);
+        const lockState = regionLocks[region.id] || {};
+        const best = regionBuffers[region.id]?.[0];
+
+        region_meta[key] = {
+            selected,
+            locked: !!lockState.locked,
+            quality: Math.round(lockState.quality || best?.quality || 0),
+            frames_buffered: regionBuffers[region.id]?.length || 0
+        };
+
+        if (!selected || !best?.data) return;
+        const metrics = extractSkinSignalMetrics(region, best.data, lockState);
+        if (metrics) regions[key] = metrics;
+    });
+
+    return { regions, region_meta };
+}
+
 async function proceedToAnalysis() {
     LOG.section('proceedToAnalysis() — user confirmed regions, computing biometrics & posting to backend');
 
@@ -1560,23 +1724,16 @@ async function proceedToAnalysis() {
     previewResp.textContent  = resp  ?? '--';
     previewBlink.textContent = blinks ?? '--';
 
-    // ⚠ STUB DATA — regions are still hardcoded, now includes jawline
-    const stubRegions = {
-        forehead:    { gloss_reflectance_score: 0.2, wrinkle_depth_index: 0.1, erythema_index: 0.2, texture_variance: 0.3 },
-        nose:        { gloss_reflectance_score: 0.6, pore_diameter_variance: 0.5 },
-        chin:        { erythema_index: 0.3, hydration_proxy: 0.6 },
-        left_cheek:  { pih_density: 0.15, melanin_variance_score: 0.2, hydration_proxy: 0.7, texture_variance: 0.25 },
-        right_cheek: { pih_density: 0.12, melanin_variance_score: 0.18, hydration_proxy: 0.72, texture_variance: 0.22 },
-        jawline:     { papule_density: 0.1, pustule_density: 0.05, erythema_index: 0.2, wrinkle_depth_index: 0.08, sagging_index: 0.1 }
-    };
-    const stubGlobal = { age: 30, gender: "female", environment_type: "urban" };
-
-    LOG.stub('regions{} is HARDCODED — includes jawline now but still not computed from captured images.');
-    LOG.stub('global.age and global.gender are HARDCODED — HF age inference may override age if token is set.');
+    const verifiedPayload = buildVerifiedRegionPayload();
+    const selectedRegionCount = Object.values(verifiedPayload.region_meta).filter(r => r.selected).length;
+    if (selectedRegionCount === 0) {
+        LOG.warn('No regions selected at confirmation; backend will return low-confidence result');
+    }
 
     const payload = {
-        regions:           stubRegions,
-        global:            stubGlobal,
+        regions:           verifiedPayload.regions,
+        region_meta:       verifiedPayload.region_meta,
+        global:            { environment_type: "urban" },
         biometrics:        { bpm, respiration: resp, blinkRate: blinks },
         face_image_base64: faceImageBase64
     };
@@ -1585,8 +1742,10 @@ async function proceedToAnalysis() {
         LOG.info('regions (keys present)', Object.keys(payload.regions));
         LOG.info('global', payload.global);
         LOG.info('biometrics (real data)', payload.biometrics);
+        LOG.info('region_meta', payload.region_meta);
         LOG.info('face_image_base64 source', faceImageBase64 ? 'stabilization snapshot' : 'none');
-        LOG.warn('biometrics are REAL values but backend ignores them — not yet wired into any service');
+        LOG.info('regions source', 'selected verified region crops → visible-signal proxy metrics');
+        LOG.warn('biometrics are displayed separately; skin scoring uses visible region signals only');
         const payloadSizeKB = Math.round(JSON.stringify({ ...payload, face_image_base64: '...' }).length / 1024);
         LOG.info('Payload size (excl. image)', payloadSizeKB + ' KB');
     });
@@ -1626,6 +1785,8 @@ async function proceedToAnalysis() {
             LOG.info('age_estimation', result.age_estimation);
             LOG.info('demographics', result.demographics);
             LOG.info('dermatology_summary', result.dermatology_summary);
+            LOG.info('data_source', result.data_source);
+            if (result.analysis_warnings?.length) LOG.warn('analysis_warnings', result.analysis_warnings);
             const pillarTable = {};
             Object.entries(result.pillars || {}).forEach(([k, v]) => {
                 pillarTable[k] = { score: v?.score, state: v?.state, driver: v?.driver_region };
@@ -1739,13 +1900,13 @@ function showResults(data, vitals, submittedFaceImageBase64 = null, savedLogFile
         }
     });
 
-    const overall = count > 0 ? Math.round(total / count) : 85;
+    const overall = count > 0 ? Math.round(total / count) : null;
     const hero = document.createElement('div');
     hero.className = 'wellness-hero';
     hero.style.cssText = 'grid-column:1/-1;background:rgba(236,97,14,0.07);border:1px solid rgba(236,97,14,0.2);';
     hero.innerHTML = `
-        <h1 style="font-size:4rem;line-height:1;margin-bottom:8px;color:#F5EDE6;">${overall}</h1>
-        <p style="font-size:0.72rem;font-weight:600;letter-spacing:0.06em;color:#7A6055;text-transform:uppercase;">Overall Wellness Index</p>
+        <h1 style="font-size:4rem;line-height:1;margin-bottom:8px;color:#F5EDE6;">${overall ?? '--'}</h1>
+        <p style="font-size:0.72rem;font-weight:600;letter-spacing:0.06em;color:#7A6055;text-transform:uppercase;">Overall Skin Signal Index</p>
     `;
     resultsGrid.appendChild(hero);
 
@@ -1766,12 +1927,13 @@ function showResults(data, vitals, submittedFaceImageBase64 = null, savedLogFile
     const demographics = data.demographics || {};
     const summary = data.dermatology_summary || {};
     const estimatedAge = data.age_estimation?.estimated_age;
-    metaCard.innerHTML = `
-        <h3>Clinical Summary</h3>
+        metaCard.innerHTML = `
+        <h3>Skin Signal Summary</h3>
         <p>Confidence: <strong>${data.confidence ?? '--'}%</strong></p>
         <p>Estimated Age: <strong>${estimatedAge ?? '--'}</strong></p>
         <p>Profile: <strong>${demographics.age ?? '--'} / ${demographics.gender ?? '--'}</strong></p>
         <p>Finding: <strong style="color:#EC610E;">${summary.primary_finding || 'Maintenance & Prevention'}</strong></p>
+        <p style="font-size:0.78rem;color:#7A6055;margin-top:8px;">Based on selected region crops and visible skin-signal proxies. Not a diagnosis.</p>
     `;
     resultsGrid.appendChild(metaCard);
 

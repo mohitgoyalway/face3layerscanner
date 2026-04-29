@@ -36,28 +36,28 @@ function generateClinicalInsight(pillar, model, input) {
 
   const templates = {
     Oil_Balance: {
-      high: `Significant sebaceous activity in the ${r}. For a ${gender} profile, this indicates localized congestion requiring targeted mattifying care.`,
-      low: `Balanced oil levels observed. Barrier function is maintaining optimal surface lipids for your demographic.`
+      high: `Visible shine and pore signals are strongest around the ${r}. This suggests that area may need targeted oil-control care.`,
+      low: `Visible oil signals look balanced across the captured regions.`
     },
     Breakouts_Skin_Calmness: {
-      high: `Active inflammatory markers concentrated in the ${r}. At age ${age}, this localized congestion is a clinical priority.`,
-      low: `Minimal inflammatory signals detected. Your skin shows excellent resilience and clarity in the ${r}.`
+      high: `Visible redness and breakout-like texture are most noticeable near the ${r}. Consider tracking this area over repeated scans.`,
+      low: `Few visible breakout-like signals were found in the captured regions.`
     },
     Evenness_Marks: {
-      high: `Localized tone variance detected in the ${r}. Proactive management of marks is recommended to maintain brightness.`,
-      low: `Superior tone evenness. Your skin maintains a bright, uniform appearance across all analyzed regions.`
+      high: `Tone variation and mark-like signals are most noticeable around the ${r}.`,
+      low: `The captured regions show relatively even visible tone.`
     },
     Skin_Strength_Sensitivity: {
-      high: `Barrier integrity appears compromised in the ${r}. At age ${age}, restorative hydration is essential to reduce reactivity.`,
-      low: `Resilient barrier function. Your skin shows optimal hydration retention and minimal sensitivity markers.`
+      high: `Visible dryness or redness signals are strongest near the ${r}.`,
+      low: `The captured regions show fewer visible dryness or sensitivity signals.`
     },
     Smoothness_Pore_Look: {
-      high: `Textural variance detected around the ${r}, often correlating with sebaceous activity and follicular congestion.`,
-      low: `Refined surface texture. Your skin maintains a smooth, polished appearance with minimal pore visibility.`
+      high: `Texture and pore-look signals are most visible around the ${r}.`,
+      low: `The captured regions show relatively smooth visible texture.`
     },
     Firmness_Fine_Lines: {
-      high: `Early expression lines detected in the ${r}. At age ${age}, support for collagen and elasticity is recommended.`,
-      low: `Superior resilience. Your firmness levels are excellent compared to the clinical baseline for age ${age}.`
+      high: `Fine-line-like texture signals are most noticeable around the ${r}.`,
+      low: `The captured regions show fewer visible fine-line-like signals.`
     }
   };
 
@@ -78,6 +78,15 @@ function build(pillar, model, input) {
 }
 
 function generateDermatologySummary(results, input) {
+  const available = Object.values(results || {}).filter(Boolean);
+  if (available.length === 0) {
+    return {
+      primary_finding: "Insufficient selected region data",
+      clinical_standard: "Visible skin signal scan",
+      professional_grade: "Low-confidence AI skin signal review"
+    };
+  }
+
   const priorities = [];
   if (results.Breakouts_Skin_Calmness?.score < 50) priorities.push("Active Inflammation");
   if (results.Oil_Balance?.score < 50) priorities.push("Sebum Dysregulation");
@@ -87,8 +96,8 @@ function generateDermatologySummary(results, input) {
 
   return {
     primary_finding: primaryFinding,
-    clinical_standard: `${input.global?.age || 35}yo ${input.global?.gender || 'Female'} Profile`,
-    professional_grade: "Dermatology-Aligned Assessment"
+    clinical_standard: "Visible skin signal scan",
+    professional_grade: "AI skin signal review"
   };
 }
 

@@ -28,6 +28,8 @@ async function analyzeFace(req, res) {
       success: true,
       ...finalAnalysis,
       confidence,
+      data_source: "verified_region_visible_signal_proxies",
+      analysis_warnings: cleanedInput.analysis_warnings || [],
       age_estimation: {
         source: "huggingface",
         estimated_age: estimatedAge ?? null

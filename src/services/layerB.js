@@ -71,7 +71,9 @@ function evaluateRegions(regions, calculator) {
     const result = calculator(region);
     if (result && result.score !== null) {
       regionScores[name] = result.score;
-      result.signals.forEach(s => signals.add(s));
+      result.signals.forEach(s => {
+        if (exists(region?.[s])) signals.add(s);
+      });
     }
   });
   return { regionScores, signals: [...signals] };
