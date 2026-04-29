@@ -215,8 +215,12 @@ const REGIONS = [
         pad: 0.25,
         useBboxCrop: true,
         crop: {
-            minFaceWidthRatio:  0.25,
-            minFaceHeightRatio: 0.18
+            // Include outer cheek / side-face acne zone, not only front cheek.
+            padX: 0.50,
+            padY: 0.30,
+            offsetX: -0.22,
+            minFaceWidthRatio:  0.36,
+            minFaceHeightRatio: 0.22
         },
         anchors: [123, 117, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[100, 300], [500, 350], [400, 650]], // Proportional Zoom
@@ -229,8 +233,12 @@ const REGIONS = [
         pad: 0.25,
         useBboxCrop: true,
         crop: {
-            minFaceWidthRatio:  0.25,
-            minFaceHeightRatio: 0.18
+            // Include outer cheek / side-face acne zone, not only front cheek.
+            padX: 0.50,
+            padY: 0.30,
+            offsetX: 0.22,
+            minFaceWidthRatio:  0.36,
+            minFaceHeightRatio: 0.22
         },
         anchors: [352, 346, 6], // Outer-Eye, Inner-Eye, Nose-Bridge (Rigid)
         target: [[700, 300], [300, 350], [400, 650]], // Proportional Zoom
@@ -261,11 +269,12 @@ const REGIONS = [
         pad: 0.15,
         useBboxCrop: true,
         crop: {
-            padX: 0.22,
-            padY: 0.20,
-            offsetY: 0.18,         // shift crop slightly downward toward jaw
-            minFaceWidthRatio: 0.58,
-            minFaceHeightRatio: 0.14
+            // Wider/taller lower-face crop to include side jaw acne zones.
+            padX: 0.30,
+            padY: 0.48,
+            offsetY: 0.02,
+            minFaceWidthRatio: 0.66,
+            minFaceHeightRatio: 0.26
         },
         anchors: [172, 397, 152], // left-jaw, right-jaw, chin-tip
         target: [[80, 280], [720, 280], [400, 680]],
@@ -872,12 +881,12 @@ function checkLighting() {
 
 // Region-specific hints shown during active scan when a region is stuck below good quality
 const REGION_HINTS = {
-    'live-Forehead':    'FOREHEAD NEEDS MORE — HOLD PERFECTLY STILL',
-    'live-Nose':        'NOSE NEEDS MORE — MOVE A LITTLE CLOSER',
-    'live-Left-Cheek':  'LEFT CHEEK NEEDS MORE — ENSURE EVEN LIGHTING ON CHEEK',
-    'live-Right-Cheek': 'RIGHT CHEEK NEEDS MORE — ENSURE EVEN LIGHTING ON CHEEK',
-    'live-Chin':        'CHIN NEEDS MORE — LIFT CHIN SLIGHTLY',
-    'live-Jawline':     'JAWLINE NEEDS MORE — HOLD PERFECTLY STILL',
+    'live-Forehead':    'IMPROVING FOREHEAD DETAIL — KEEP HAIR AWAY',
+    'live-Nose':        'IMPROVING NOSE DETAIL — REDUCE GLARE',
+    'live-Left-Cheek':  'IMPROVING LEFT CHEEK SIDE — TURN SLIGHTLY TOWARD LIGHT',
+    'live-Right-Cheek': 'IMPROVING RIGHT CHEEK SIDE — TURN SLIGHTLY TOWARD LIGHT',
+    'live-Chin':        'IMPROVING CHIN DETAIL — LIFT SLIGHTLY',
+    'live-Jawline':     'IMPROVING JAWLINE SIDES — KEEP LOWER FACE VISIBLE',
 };
 
 function getRegionHint() {
