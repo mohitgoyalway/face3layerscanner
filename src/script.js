@@ -1885,6 +1885,131 @@ function detrend(arr, w) {
     return res;
 }
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[ch]));
+}
+
+function getDiagnosisOverall(diagnosis) {
+    let total = 0, count = 0;
+    Object.values(diagnosis?.pillars || {}).forEach(p => {
+        if (p && typeof p.score === 'number') {
+            total += p.score;
+            count++;
+        }
+    });
+    return count > 0 ? Math.round(total / count) : null;
+}
+
+function getDiagnosisSet(data) {
+    const fallbackDiagnosis1 = {
+        available: true,
+        label: 'Diagnosis 1: Region Scan',
+        data_source: data.data_source || 'verified_region_visible_signal_proxies',
+        demographics: data.demographics,
+        pillars: data.pillars,
+        dermatology_summary: data.dermatology_summary,
+        confidence: data.confidence,
+        analysis_warnings: data.analysis_warnings || [],
+        age_estimation: data.age_estimation
+    };
+    const d1 = data.diagnoses?.diagnosis_1 || fallbackDiagnosis1;
+    const d2 = data.diagnoses?.diagnosis_2 || {
+        available: false,
+        label: 'Diagnosis 2: Full-Face AI Review',
+        confidence: 0,
+        pillars: {},
+        dermatology_summary: { primary_finding: 'Full-face AI review unavailable' },
+        analysis_warnings: ['Diagnosis 2 was not returned by the backend.']
+    };
+    return [d1, d2];
+}
+
+function createResultCard(title, bodyHtml) {
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.innerHTML = `<h3>${escapeHtml(title)}</h3>${bodyHtml}`;
+    return card;
+}
+
+function renderDiagnosisPanel(diagnosis, options = {}) {
+    const overall = getDiagnosisOverall(diagnosis);
+    const summary = diagnosis.dermatology_summary || {};
+    const demographics = diagnosis.demographics || {};
+    const available = diagnosis.available !== false;
+    const panel = document.createElement('details');
+    panel.className = `diagnosis-panel ${available ? '' : 'is-unavailable'}`;
+    if (options.open) panel.open = true;
+
+    const warningText = (diagnosis.analysis_warnings || [])[0];
+    panel.innerHTML = `
+        <summary class="diagnosis-summary">
+            <span>
+                <strong>${escapeHtml(diagnosis.label || options.label || 'Diagnosis')}</strong>
+                <small>${escapeHtml(summary.primary_finding || (available ? 'Visible skin signal review' : 'Unavailable'))}</small>
+            </span>
+            <span class="diagnosis-score">${overall ?? '--'}</span>
+        </summary>
+        <div class="diagnosis-body">
+            <div class="wellness-hero diagnosis-hero">
+                <h1>${overall ?? '--'}</h1>
+                <p>Overall Skin Signal Index</p>
+            </div>
+        </div>
+    `;
+
+    const body = panel.querySelector('.diagnosis-body');
+    body.appendChild(createResultCard('Skin Signal Summary', `
+        <p>Confidence: <strong>${diagnosis.confidence ?? '--'}%</strong></p>
+        <p>Profile: <strong>${escapeHtml(demographics.age ?? '--')} / ${escapeHtml(demographics.gender ?? '--')}</strong></p>
+        <p>Finding: <strong style="color:#EC610E;">${escapeHtml(summary.primary_finding || 'Maintenance & Prevention')}</strong></p>
+        <p style="font-size:0.78rem;color:#7A6055;margin-top:8px;">${escapeHtml(options.note || 'Based on visible skin-signal proxies. Not a medical diagnosis.')}</p>
+        ${warningText ? `<p style="font-size:0.74rem;color:#F0A030;margin-top:8px;">${escapeHtml(warningText)}</p>` : ''}
+    `));
+
+    if (options.includeVitals) {
+        body.appendChild(createResultCard('Scan Biometrics', `
+            <p>Heart Rate: <strong>${options.vitals.bpm ?? '--'} BPM</strong>${options.vitals.bpm === null ? ' <span style="font-size:0.72rem;color:#F0A030">(insufficient data)</span>' : ''}</p>
+            <p>Respiration: <strong>${options.vitals.resp ?? '--'} br/m</strong>${options.vitals.resp === null ? ' <span style="font-size:0.72rem;color:#F0A030">(insufficient data)</span>' : ''}</p>
+            <p>Blink Rate: <strong>${options.vitals.blinks ?? '--'} blinks/m</strong></p>
+        `));
+    }
+
+    if (options.imageBase64) {
+        body.appendChild(createResultCard(options.imageTitle || 'Full-Face Image', `
+            <img
+                src="${options.imageBase64}"
+                alt="${escapeHtml(options.imageTitle || 'Full-face scan frame')}"
+                style="width:100%;max-height:240px;object-fit:contain;border-radius:10px;border:1px solid rgba(236,97,14,0.2);background:#000;margin-top:8px;"
+            />
+        `));
+    }
+
+    Object.entries(diagnosis.pillars || {}).forEach(([pillarName, pillar]) => {
+        if (!pillar) return;
+        body.appendChild(createResultCard(pillarName.replaceAll('_', ' '), `
+            <p>Score: <strong style="color:#EC610E;">${escapeHtml(pillar.score)}</strong></p>
+            <p>State: <strong>${escapeHtml(pillar.state)}</strong></p>
+            <p>Region: <strong>${escapeHtml(pillar.driver_region || 'NA')}</strong></p>
+            <p style="margin-top:8px;font-size:0.83rem;">${escapeHtml(pillar.insight || '')}</p>
+        `));
+    });
+
+    if (!available) {
+        body.appendChild(createResultCard('Status', `
+            <p><strong>Diagnosis 2 is unavailable.</strong></p>
+            <p style="font-size:0.83rem;">${escapeHtml(warningText || 'The full-face AI review could not be completed.')}</p>
+        `));
+    }
+
+    return panel;
+}
+
 function showResults(data, vitals, submittedFaceImageBase64 = null, savedLogFilename = null) {
     LOG.section('showResults() — rendering results UI');
     LOG.info('Vitals displayed to user', vitals);
@@ -1892,86 +2017,40 @@ function showResults(data, vitals, submittedFaceImageBase64 = null, savedLogFile
     resultsSection.classList.remove('hidden');
     resultsGrid.innerHTML = '';
 
-    let total = 0, count = 0;
-    Object.values(data.pillars || {}).forEach(p => {
-        if (p && typeof p.score === 'number') {
-            total += p.score;
-            count++;
-        }
-    });
-
-    const overall = count > 0 ? Math.round(total / count) : null;
-    const hero = document.createElement('div');
-    hero.className = 'wellness-hero';
-    hero.style.cssText = 'grid-column:1/-1;background:rgba(236,97,14,0.07);border:1px solid rgba(236,97,14,0.2);';
-    hero.innerHTML = `
-        <h1 style="font-size:4rem;line-height:1;margin-bottom:8px;color:#F5EDE6;">${overall ?? '--'}</h1>
-        <p style="font-size:0.72rem;font-weight:600;letter-spacing:0.06em;color:#7A6055;text-transform:uppercase;">Overall Skin Signal Index</p>
+    const [diagnosis1, diagnosis2] = getDiagnosisSet(data);
+    const overview = document.createElement('div');
+    overview.className = 'diagnosis-overview';
+    overview.innerHTML = `
+        <div>
+            <span>Diagnosis 1</span>
+            <strong>${getDiagnosisOverall(diagnosis1) ?? '--'}</strong>
+            <small>${escapeHtml(diagnosis1.dermatology_summary?.primary_finding || 'Region scan')}</small>
+        </div>
+        <div>
+            <span>Diagnosis 2</span>
+            <strong>${getDiagnosisOverall(diagnosis2) ?? '--'}</strong>
+            <small>${escapeHtml(diagnosis2.dermatology_summary?.primary_finding || 'Full-face AI review')}</small>
+        </div>
     `;
-    resultsGrid.appendChild(hero);
+    resultsGrid.appendChild(overview);
 
-    const vitalsCard = document.createElement('div');
-    vitalsCard.className = 'result-card';
-    vitalsCard.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);';
-    vitalsCard.innerHTML = `
-        <h3>Scan Biometrics</h3>
-        <p>Heart Rate: <strong>${vitals.bpm ?? '--'} BPM</strong>${vitals.bpm === null ? ' <span style="font-size:0.72rem;color:#F0A030">(insufficient data)</span>' : ''}</p>
-        <p>Respiration: <strong>${vitals.resp ?? '--'} br/m</strong>${vitals.resp === null ? ' <span style="font-size:0.72rem;color:#F0A030">(insufficient data)</span>' : ''}</p>
-        <p>Blink Rate: <strong>${vitals.blinks ?? '--'} blinks/m</strong></p>
-    `;
-    resultsGrid.appendChild(vitalsCard);
+    resultsGrid.appendChild(renderDiagnosisPanel(diagnosis1, {
+        open: true,
+        vitals,
+        includeVitals: true,
+        note: 'Based on selected verified region crops and the current region-analysis pipeline. Not a medical diagnosis.'
+    }));
 
-    const metaCard = document.createElement('div');
-    metaCard.className = 'result-card';
-    metaCard.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);';
-    const demographics = data.demographics || {};
-    const summary = data.dermatology_summary || {};
-    const estimatedAge = data.age_estimation?.estimated_age;
-        metaCard.innerHTML = `
-        <h3>Skin Signal Summary</h3>
-        <p>Confidence: <strong>${data.confidence ?? '--'}%</strong></p>
-        <p>Estimated Age: <strong>${estimatedAge ?? '--'}</strong></p>
-        <p>Profile: <strong>${demographics.age ?? '--'} / ${demographics.gender ?? '--'}</strong></p>
-        <p>Finding: <strong style="color:#EC610E;">${summary.primary_finding || 'Maintenance & Prevention'}</strong></p>
-        <p style="font-size:0.78rem;color:#7A6055;margin-top:8px;">Based on selected region crops and visible skin-signal proxies. Not a diagnosis.</p>
-    `;
-    resultsGrid.appendChild(metaCard);
-
-    if (submittedFaceImageBase64) {
-        const imageCard = document.createElement('div');
-        imageCard.className = 'result-card';
-        imageCard.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);';
-        imageCard.innerHTML = `
-            <h3>Image Sent to Age Model</h3>
-            <img
-                src="${submittedFaceImageBase64}"
-                alt="Face frame sent to Hugging Face"
-                style="width:100%;max-height:240px;object-fit:contain;border-radius:10px;border:1px solid rgba(236,97,14,0.2);background:#000;margin-top:8px;"
-            />
-        `;
-        resultsGrid.appendChild(imageCard);
-    }
-
-    Object.entries(data.pillars || {}).forEach(([pillarName, pillar]) => {
-        if (!pillar) return;
-        const card = document.createElement('div');
-        card.className = 'result-card';
-        card.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);';
-        card.innerHTML = `
-            <h3>${pillarName.replaceAll('_', ' ')}</h3>
-            <p>Score: <strong style="color:#EC610E;">${pillar.score}</strong></p>
-            <p>State: <strong>${pillar.state}</strong></p>
-            <p>Region: <strong>${pillar.driver_region || 'NA'}</strong></p>
-            <p style="margin-top:8px;font-size:0.83rem;">${pillar.insight || ''}</p>
-        `;
-        resultsGrid.appendChild(card);
-    });
+    resultsGrid.appendChild(renderDiagnosisPanel(diagnosis2, {
+        imageBase64: submittedFaceImageBase64,
+        imageTitle: 'Full-Face Image Reviewed',
+        note: 'Based on the single full-face stabilization image using an independent AI vision review. Not a medical diagnosis.'
+    }));
 
     const foot = document.createElement('div');
     foot.style.cssText = 'grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:12px;';
     foot.appendChild(resetBtn);
 
-    // Log download / server link
     const logRow = document.createElement('div');
     logRow.style.cssText = 'display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center;';
 
