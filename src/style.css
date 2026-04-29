@@ -728,7 +728,7 @@ body.region-confirm-active .container {
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 9px;
   min-width: 0;
 }
@@ -753,16 +753,26 @@ body.region-confirm-active .container {
 
 .confirm-region-image-wrap {
   position: relative;
-  width: 100%;
+  width: fit-content;
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
 }
 
 .confirm-region-canvas {
   display: block;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
+  max-height: 190px;
   height: auto;
   border-radius: var(--r-md);
   border: 1px solid var(--border);
   background: var(--bg-2);
+}
+
+.confirm-forehead .confirm-region-canvas,
+.confirm-jawline .confirm-region-canvas {
+  max-height: 165px;
 }
 
 .confirm-region-selector {
@@ -1107,17 +1117,32 @@ body.region-confirm-active .container {
 
   /* ── REGION CONFIRMATION VIEW ── */
   #regionImagesGrid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    max-width: 420px;
   }
 
   .confirm-forehead,
   .confirm-nose {
-    max-width: min(100%, 340px);
+    max-width: 100%;
+  }
+
+  .confirm-region-card {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .confirm-region-canvas {
+    max-height: 150px;
+  }
+
+  .confirm-forehead .confirm-region-canvas,
+  .confirm-jawline .confirm-region-canvas {
+    max-height: 130px;
   }
 
   .confirm-region-name {
-    font-size: 0.68rem;
+    font-size: 0.72rem;
     letter-spacing: 0.06em;
   }
 
